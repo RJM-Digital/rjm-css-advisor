@@ -29,6 +29,7 @@
 		$(document).on('click',   '.rjm-css-advisor-tryagain', onTryAgainClick);
 		$(document).on('click',   '.rjm-css-advisor-close',    onCloseClick);
 		$(document).on('click',   '.rjm-copy-btn',             onCopyClick);
+		$(document).on('click',   '.rjm-chat-code-copy',       onChatCodeCopyClick);
 		$(document).on('click',   '.rjm-insert-btn',           onInsertClick);
 		// Ctrl/Cmd + Enter inside the goal textarea submits the form.
 		$(document).on('keydown', '.rjm-css-goal-input',       onGoalKeydown);
@@ -37,6 +38,14 @@
 		$(document).on('change',  '.rjm-css-screenshot-input', onScreenshotInputChange);
 		$(document).on('click',   '.rjm-css-screenshot-remove', onScreenshotRemoveClick);
 		$(document).on('click',   '.rjm-css-screenshot-clear', onScreenshotClearClick);
+		$(document).on('click',   '.rjm-css-fullscreen-btn',   onFullscreenClick);
+		$(document).on('click',   '.rjm-css-example-chip',     onExampleChipClick);
+		$(document).on('click',   '.rjm-css-menu-btn',         onMenuButtonClick);
+		$(document).on('click',   '.rjm-css-menu-popover',     function (e) { e.stopPropagation(); });
+		$(document).on('change',  '.rjm-css-breakpoint-input', onBreakpointChange);
+		$(document).on('input',   '.rjm-css-goal-input',       onGoalInput);
+		$(document).on('click',   closeAllMenus);
+		$(document).on('keydown', onDocumentKeydown);
 	});
 
 	// -------------------------------------------------------------------------
@@ -110,16 +119,36 @@
 
 	function onModeChange(e) {
 		var $panel = $(e.target).closest('.rjm-css-advisor-panel');
+		closeAllMenus();
 		resetModeState($panel);
 		updateModeUI($panel);
 	}
 
 	function onGoalKeydown(e) {
-		// Ctrl+Enter or Cmd+Enter submits the goal.
-		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-			e.preventDefault();
-			$(this).closest('.rjm-css-advisor-wrap').find('.rjm-css-generate-btn').trigger('click');
+		// Enter sends, Shift+Enter inserts a newline. Ctrl/Cmd+Enter always sends.
+		if (e.key !== 'Enter') {
+			return;
 		}
+
+		if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+			return;
+		}
+
+		e.preventDefault();
+		$(this).closest('.rjm-css-advisor-wrap').find('.rjm-css-generate-btn').trigger('click');
+	}
+
+	function onGoalInput() {
+		autoGrowTextarea(this);
+	}
+
+	// Grow the composer with its content, up to a scrollable cap.
+	function autoGrowTextarea(el) {
+		if (!el || !el.offsetParent) {
+			return;
+		}
+		el.style.height = 'auto';
+		el.style.height = Math.min(el.scrollHeight, 200) + 'px';
 	}
 
 	function onGoalPaste(e) {
@@ -324,9 +353,9 @@
 
 		// Chat mode keeps the composer on screen and appends to the transcript.
 		setResultsPriorityState($panel, true);
-		$panel.find('.rjm-css-advisor-actions').removeAttr('hidden');
 		appendMessageBubble($panel, 'user', message, screenshots);
 		$panel.find('.rjm-css-goal-input').val('').focus();
+		autoGrowTextarea($panel.find('.rjm-css-goal-input')[0]);
 		clearPendingScreenshot($panel);
 
 		var payload = {
@@ -537,12 +566,8 @@
 			$panel.removeData('planAbort');
 		}
 
-		$panel.find('.rjm-css-generate-btn').prop('disabled', isStreaming);
-		if (isStreaming) {
-			$panel.find('.rjm-css-plan-stop-btn').removeAttr('hidden');
-		} else {
-			$panel.find('.rjm-css-plan-stop-btn').attr('hidden', true);
-		}
+		$panel.find('.rjm-css-generate-btn').prop('disabled', isStreaming).attr('hidden', isStreaming || null);
+		$panel.find('.rjm-css-plan-stop-btn').attr('hidden', isStreaming ? null : true);
 	}
 
 	/**
@@ -758,6 +783,8 @@
 	function closePanel($wrap, $panel) {
 		$panel.attr('hidden', true);
 		// Reset panel to initial state so it opens cleanly next time.
+		setFullscreen($panel, false);
+		closeAllMenus();
 		abortPlanStream($panel);
 		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
 		$panel.find('.rjm-css-advisor-loading').attr('hidden', true);
@@ -796,10 +823,94 @@
 		$wrap.find('.rjm-css-advisor-btn').first().attr('aria-expanded', 'true');
 		updateModeUI($panel);
 		$panel.find('.rjm-css-goal-input').focus();
+		autoGrowTextarea($panel.find('.rjm-css-goal-input')[0]);
 	}
 
 	function getSelectedMode($panel) {
 		return $panel.find('.rjm-css-mode-input:checked').val() || 'generate';
+	}
+
+	// -------------------------------------------------------------------------
+	// Composer menus (mode / breakpoints)
+	// -------------------------------------------------------------------------
+
+	function onMenuButtonClick(e) {
+		e.preventDefault();
+		e.stopPropagation();
+
+		var $menu = $(this).closest('.rjm-css-menu');
+		var wasOpen = $menu.hasClass('is-open');
+
+		closeAllMenus();
+		if (!wasOpen) {
+			$menu.addClass('is-open');
+			$menu.find('.rjm-css-menu-btn').attr('aria-expanded', 'true');
+			$menu.find('.rjm-css-menu-popover').removeAttr('hidden');
+		}
+	}
+
+	function closeAllMenus() {
+		var $open = $('.rjm-css-menu.is-open');
+		if (!$open.length) {
+			return;
+		}
+		$open.removeClass('is-open');
+		$open.find('.rjm-css-menu-btn').attr('aria-expanded', 'false');
+		$open.find('.rjm-css-menu-popover').attr('hidden', true);
+	}
+
+	function onBreakpointChange(e) {
+		updateBreakpointMenuLabel($(e.target).closest('.rjm-css-advisor-panel'));
+	}
+
+	function onDocumentKeydown(e) {
+		if (e.key !== 'Escape') {
+			return;
+		}
+
+		if ($('.rjm-css-menu.is-open').length) {
+			closeAllMenus();
+			return;
+		}
+
+		var $fullscreen = $('.rjm-css-advisor-panel.is-fullscreen');
+		if ($fullscreen.length) {
+			setFullscreen($fullscreen, false);
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Fullscreen
+	// -------------------------------------------------------------------------
+
+	function onFullscreenClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		setFullscreen($panel, !$panel.hasClass('is-fullscreen'));
+	}
+
+	function setFullscreen($panel, isFullscreen) {
+		if (isFullscreen) {
+			// Only one panel may own the overlay at a time.
+			setFullscreen($('.rjm-css-advisor-panel.is-fullscreen').not($panel), false);
+			if (!$('.rjm-css-advisor-backdrop').length) {
+				$('<div class="rjm-css-advisor-backdrop"></div>').appendTo('body');
+			}
+			$('body').addClass('rjm-css-advisor-locked');
+		} else {
+			$('.rjm-css-advisor-backdrop').remove();
+			$('body').removeClass('rjm-css-advisor-locked');
+		}
+
+		$panel.toggleClass('is-fullscreen', isFullscreen);
+		$panel.find('.rjm-css-fullscreen-btn')
+			.attr('aria-pressed', isFullscreen ? 'true' : 'false')
+			.find('span').text(isFullscreen ? '⤡' : '⤢');
+
+		if ($panel.length) {
+			scrollTranscript($panel, true);
+			$panel.find('.rjm-css-goal-input').focus();
+		}
 	}
 
 	function collectRequestContext($wrap) {
@@ -818,31 +929,89 @@
 		var mode = getSelectedMode($panel);
 		var $button = $panel.find('.rjm-css-generate-btn');
 		var isPlanReady = Boolean($panel.data('planReady'));
+		var isChat = mode === 'ask';
+		var label;
 
+		$panel.toggleClass('is-chat-mode', isChat);
+
+		if (isChat) {
+			label = cfg.i18n.sendPlanBtn || 'Send message';
+		} else if (mode === 'build') {
+			label = cfg.i18n.startBuildBtn || 'Start build';
+		} else {
+			label = cfg.i18n.generateBtn || 'Generate CSS';
+		}
+
+		// The send button holds an icon, so only its accessible name changes.
+		$button.attr({ title: label, 'aria-label': label });
+		$panel.find('.rjm-css-mode-menu .rjm-css-menu-label').text(getModeLabel(mode));
+		updateBreakpointMenuLabel($panel);
+
+		$panel.find('.rjm-css-screenshot-controls').attr('hidden', !isChat || null);
+		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', (isChat && isPlanReady) ? null : true);
+
+		// In chat mode the header owns New chat / Close, so the mid-panel bar stays hidden.
+		if (isChat) {
+			$panel.find('.rjm-css-advisor-actions').attr('hidden', true);
+		}
+
+		$panel.find('.rjm-css-goal-header').attr('hidden', isChat || null);
+
+		if (isChat) {
+			setResultsPriorityState($panel, true);
+			renderChatEmptyState($panel);
+		}
+	}
+
+	function renderChatEmptyState($panel) {
+		var $content = $panel.find('.rjm-css-advisor-content');
+		if ($content.children('.rjm-plan-transcript').length || $content.children('.rjm-css-chat-empty').length) {
+			return;
+		}
+
+		var examples = (cfg.i18n && cfg.i18n.examplePrompts) || [];
+		var $empty = $('<div class="rjm-css-chat-empty"></div>');
+
+		$empty.append($('<p class="rjm-css-chat-empty-title"></p>').text(cfg.i18n.emptyTitle || 'Describe the styling you want'));
+		$empty.append($('<p class="rjm-css-chat-empty-hint"></p>').text(cfg.i18n.emptyHint || 'Ask questions and refine the plan before generating CSS.'));
+
+		if (examples.length) {
+			var $chips = $('<div class="rjm-css-chat-examples"></div>');
+			examples.forEach(function (example) {
+				$('<button type="button" class="rjm-css-example-chip"></button>').text(example).appendTo($chips);
+			});
+			$empty.append($chips);
+		}
+
+		$content.empty().append($empty);
+	}
+
+	function onExampleChipClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var $input = $panel.find('.rjm-css-goal-input');
+		$input.val($(this).text()).focus();
+		autoGrowTextarea($input[0]);
+	}
+
+	function getModeLabel(mode) {
 		if (mode === 'ask') {
-			$panel.find('.rjm-css-screenshot-controls').removeAttr('hidden');
-			$button.text(cfg.i18n.sendPlanBtn || 'Send message');
-			if (isPlanReady) {
-				$panel.find('.rjm-css-plan-generate-btn').removeAttr('hidden');
-			} else {
-				$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
-			}
-			$panel.find('.rjm-css-breakpoints').removeAttr('hidden');
-			return;
+			return cfg.i18n.modeAsk || 'Ask/Plan';
 		}
-
 		if (mode === 'build') {
-			$panel.find('.rjm-css-screenshot-controls').attr('hidden', true);
-			$button.text(cfg.i18n.startBuildBtn || 'Start build');
-			$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
-			$panel.find('.rjm-css-breakpoints').removeAttr('hidden');
-			return;
+			return cfg.i18n.modeBuild || 'Build';
 		}
+		return cfg.i18n.modeGenerate || 'Generate';
+	}
 
-		$button.text(cfg.i18n.generateBtn || 'Generate CSS ✨');
-		$panel.find('.rjm-css-screenshot-controls').attr('hidden', true);
-		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
-		$panel.find('.rjm-css-breakpoints').removeAttr('hidden');
+	function updateBreakpointMenuLabel($panel) {
+		var selected = getSelectedBreakpoints($panel);
+		var names = { mobile: cfg.i18n.breakpointMobile || 'Mobile', tablet: cfg.i18n.breakpointTablet || 'Tablet', desktop: cfg.i18n.breakpointDesktop || 'Desktop' };
+		var label = selected.length
+			? selected.map(function (key) { return names[key] || key; }).join(', ')
+			: (cfg.i18n.breakpointsAll || 'All breakpoints');
+
+		$panel.find('.rjm-css-breakpoint-menu .rjm-css-menu-label').text(label);
 	}
 
 	function resetModeState($panel) {
@@ -933,8 +1102,7 @@
 
 		if (!$transcript.length) {
 			$content.empty();
-			$transcript = $('<div class="rjm-plan-transcript"></div>').appendTo($content);
-			$content.off('scroll.rjmPlan').on('scroll.rjmPlan', function () {
+			$transcript = $('<div class="rjm-plan-transcript"></div>').appendTo($content);			$content.off('scroll.rjmPlan').on('scroll.rjmPlan', function () {
 				var el = this;
 				$panel.data('planPinned', el.scrollHeight - el.scrollTop - el.clientHeight < 40);
 			});
@@ -1037,7 +1205,9 @@
 
 		// Park fenced code blocks before any inline processing touches them.
 		var escaped = escHtml(String(text || '')).replace(/```([a-z]*)\n?([\s\S]*?)```/gi, function (match, lang, code) {
-			blocks.push('<pre class="rjm-code-block"><code>' + code.replace(/\n$/, '') + '</code></pre>');
+			blocks.push('<div class="rjm-chat-code">' +
+				'<button type="button" class="rjm-chat-code-copy">' + escHtml(cfg.i18n.copyBtn || 'Copy') + '</button>' +
+				'<pre><code>' + code.replace(/\n$/, '') + '</code></pre></div>');
 			return '\u0000BLOCK' + (blocks.length - 1) + '\u0000';
 		});
 
@@ -1083,6 +1253,23 @@
 			.replace(/`([^`]+)`/g, '<code>$1</code>')
 			.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 			.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+	}
+
+	function onChatCodeCopyClick(e) {
+		e.preventDefault();
+		var $btn = $(this);
+		var text = $btn.closest('.rjm-chat-code').find('code').text();
+
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(text).then(function () {
+				flashCopied($btn);
+			}).catch(function () {
+				fallbackCopy(text, $btn);
+			});
+			return;
+		}
+
+		fallbackCopy(text, $btn);
 	}
 
 	function renderBuildStep($panel, step) {

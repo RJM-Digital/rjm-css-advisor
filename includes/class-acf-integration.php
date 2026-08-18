@@ -111,6 +111,17 @@ class RJM_CSS_Advisor_ACF_Integration {
 						__( 'Working through your plan…', 'rjm-css-advisor' ),
 						__( 'Almost there…', 'rjm-css-advisor' ),
 					],
+					'breakpointsAll'    => __( 'All breakpoints', 'rjm-css-advisor' ),
+					'breakpointMobile'  => __( 'Mobile', 'rjm-css-advisor' ),
+					'breakpointTablet'  => __( 'Tablet', 'rjm-css-advisor' ),
+					'breakpointDesktop' => __( 'Desktop', 'rjm-css-advisor' ),
+					'emptyTitle'        => __( 'Describe the styling you want', 'rjm-css-advisor' ),
+					'emptyHint'         => __( 'Ask questions and refine the plan, then generate the CSS when you are happy.', 'rjm-css-advisor' ),
+					'examplePrompts'    => [
+						__( 'Make the heading navy blue at 2rem', 'rjm-css-advisor' ),
+						__( 'Add more padding below this section on mobile', 'rjm-css-advisor' ),
+						__( 'Centre the buttons and add a hover effect', 'rjm-css-advisor' ),
+					],
 				],
 			]
 		);
@@ -166,20 +177,22 @@ class RJM_CSS_Advisor_ACF_Integration {
 				hidden
 			>
 				<div class="rjm-css-advisor-panel-inner">
-					<div class="rjm-css-mode-picker" role="radiogroup" aria-label="<?php esc_attr_e( 'CSS advisor mode', 'rjm-css-advisor' ); ?>">
-						<span class="rjm-css-mode-picker-label"><?php esc_html_e( 'Mode', 'rjm-css-advisor' ); ?></span>
-						<label class="rjm-css-mode-chip" data-tooltip="<?php echo esc_attr( $mode_generate_help ); ?>" title="<?php echo esc_attr( $mode_generate_help ); ?>">
-							<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="generate" title="<?php echo esc_attr( $mode_generate_help ); ?>" aria-label="<?php echo esc_attr( $mode_generate_help ); ?>" checked />
-							<span><?php esc_html_e( 'Generate', 'rjm-css-advisor' ); ?></span>
-						</label>
-						<label class="rjm-css-mode-chip" data-tooltip="<?php echo esc_attr( $mode_ask_help ); ?>" title="<?php echo esc_attr( $mode_ask_help ); ?>">
-							<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="ask" title="<?php echo esc_attr( $mode_ask_help ); ?>" aria-label="<?php echo esc_attr( $mode_ask_help ); ?>" />
-							<span><?php esc_html_e( 'Ask/Plan', 'rjm-css-advisor' ); ?></span>
-						</label>
-						<label class="rjm-css-mode-chip" data-tooltip="<?php echo esc_attr( $mode_build_help ); ?>" title="<?php echo esc_attr( $mode_build_help ); ?>">
-							<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="build" title="<?php echo esc_attr( $mode_build_help ); ?>" aria-label="<?php echo esc_attr( $mode_build_help ); ?>" />
-							<span><?php esc_html_e( 'Build', 'rjm-css-advisor' ); ?></span>
-						</label>
+					<div class="rjm-css-panel-header">
+						<div class="rjm-css-panel-title">
+							<span class="rjm-css-panel-title-text"><?php esc_html_e( 'CSS Advisor', 'rjm-css-advisor' ); ?></span>
+							<span class="rjm-css-panel-context"><?php echo esc_html( $layout_name ? $layout_name : $field_name ); ?></span>
+						</div>
+						<div class="rjm-css-panel-header-actions">
+							<button type="button" class="rjm-css-icon-btn rjm-css-advisor-tryagain" title="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>">
+								<span aria-hidden="true">↻</span>
+							</button>
+							<button type="button" class="rjm-css-icon-btn rjm-css-fullscreen-btn" title="<?php esc_attr_e( 'Expand to full screen', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Expand to full screen', 'rjm-css-advisor' ); ?>" aria-pressed="false">
+								<span aria-hidden="true">⤢</span>
+							</button>
+							<button type="button" class="rjm-css-icon-btn rjm-css-advisor-close" title="<?php esc_attr_e( 'Close', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Close', 'rjm-css-advisor' ); ?>">
+								<span aria-hidden="true">✕</span>
+							</button>
+						</div>
 					</div>
 
 					<!-- Step 1: Goal entry form -->
@@ -194,52 +207,94 @@ class RJM_CSS_Advisor_ACF_Integration {
 							</button>
 						</div>
 						<div class="rjm-css-goal-body">
-							<textarea
-								id="<?php echo esc_attr( $goal_id ); ?>"
-								class="rjm-css-goal-input large-text"
-								rows="3"
-								placeholder="<?php esc_attr_e( 'e.g. Make the heading navy blue with font size 2rem, add extra padding below the section on mobile…', 'rjm-css-advisor' ); ?>"
-							></textarea>
-							<div class="rjm-css-screenshot-controls" hidden>
-								<input type="file" class="rjm-css-screenshot-input" accept="image/png,image/jpeg,image/webp" multiple hidden />
-								<button type="button" class="button rjm-css-screenshot-upload-btn">
-									<?php esc_html_e( 'Attach screenshot', 'rjm-css-advisor' ); ?>
-								</button>
-								<span class="rjm-css-screenshot-help"><?php esc_html_e( 'Paste an image here or choose a file.', 'rjm-css-advisor' ); ?></span>
+							<div class="rjm-css-composer">
 								<div class="rjm-css-screenshot-preview" hidden></div>
-								<button type="button" class="button-link rjm-css-screenshot-clear" hidden>
-									<?php esc_html_e( 'Clear screenshots', 'rjm-css-advisor' ); ?>
-								</button>
-								<p class="rjm-css-screenshot-error rjm-error" role="alert" hidden></p>
-							</div>
-							<fieldset class="rjm-css-breakpoints" aria-label="<?php esc_attr_e( 'Responsive breakpoints', 'rjm-css-advisor' ); ?>">
-								<legend class="rjm-css-breakpoints-legend"><?php esc_html_e( 'Apply to breakpoints', 'rjm-css-advisor' ); ?></legend>
-								<div class="rjm-css-breakpoints-list">
-									<label class="rjm-css-breakpoint">
-										<input type="checkbox" class="rjm-css-breakpoint-input" value="mobile" />
-										<span><?php esc_html_e( 'Mobile', 'rjm-css-advisor' ); ?></span>
-									</label>
-									<label class="rjm-css-breakpoint">
-										<input type="checkbox" class="rjm-css-breakpoint-input" value="tablet" />
-										<span><?php esc_html_e( 'Tablet', 'rjm-css-advisor' ); ?></span>
-									</label>
-									<label class="rjm-css-breakpoint">
-										<input type="checkbox" class="rjm-css-breakpoint-input" value="desktop" />
-										<span><?php esc_html_e( 'Desktop', 'rjm-css-advisor' ); ?></span>
-									</label>
+								<textarea
+									id="<?php echo esc_attr( $goal_id ); ?>"
+									class="rjm-css-goal-input"
+									rows="2"
+									placeholder="<?php esc_attr_e( 'Describe what you want to achieve…', 'rjm-css-advisor' ); ?>"
+								></textarea>
+
+								<div class="rjm-css-composer-toolbar">
+									<div class="rjm-css-composer-tools">
+										<span class="rjm-css-screenshot-controls" hidden>
+											<input type="file" class="rjm-css-screenshot-input" accept="image/png,image/jpeg,image/webp" multiple hidden />
+											<button type="button" class="rjm-css-icon-btn rjm-css-screenshot-upload-btn" title="<?php esc_attr_e( 'Attach screenshot — or paste an image here', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Attach screenshot', 'rjm-css-advisor' ); ?>">
+												<span aria-hidden="true">+</span>
+											</button>
+										</span>
+
+										<div class="rjm-css-menu rjm-css-mode-menu">
+											<button type="button" class="rjm-css-menu-btn" aria-haspopup="true" aria-expanded="false">
+												<span class="rjm-css-menu-label"><?php esc_html_e( 'Generate', 'rjm-css-advisor' ); ?></span>
+												<span class="rjm-css-menu-caret" aria-hidden="true">▾</span>
+											</button>
+											<div class="rjm-css-menu-popover" role="radiogroup" aria-label="<?php esc_attr_e( 'CSS advisor mode', 'rjm-css-advisor' ); ?>" hidden>
+												<label class="rjm-css-menu-option">
+													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="generate" checked />
+													<span class="rjm-css-menu-option-body">
+														<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Generate', 'rjm-css-advisor' ); ?></span>
+														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_generate_help ); ?></span>
+													</span>
+												</label>
+												<label class="rjm-css-menu-option">
+													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="ask" />
+													<span class="rjm-css-menu-option-body">
+														<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Ask/Plan', 'rjm-css-advisor' ); ?></span>
+														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_ask_help ); ?></span>
+													</span>
+												</label>
+												<label class="rjm-css-menu-option">
+													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="build" />
+													<span class="rjm-css-menu-option-body">
+														<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Build', 'rjm-css-advisor' ); ?></span>
+														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_build_help ); ?></span>
+													</span>
+												</label>
+											</div>
+										</div>
+
+										<div class="rjm-css-menu rjm-css-breakpoint-menu rjm-css-breakpoints">
+											<button type="button" class="rjm-css-menu-btn" aria-haspopup="true" aria-expanded="false">
+												<span class="rjm-css-menu-label"><?php esc_html_e( 'All breakpoints', 'rjm-css-advisor' ); ?></span>
+												<span class="rjm-css-menu-caret" aria-hidden="true">▾</span>
+											</button>
+											<div class="rjm-css-menu-popover" aria-label="<?php esc_attr_e( 'Responsive breakpoints', 'rjm-css-advisor' ); ?>" hidden>
+												<label class="rjm-css-menu-option is-check">
+													<input type="checkbox" class="rjm-css-breakpoint-input" value="mobile" />
+													<span><?php esc_html_e( 'Mobile', 'rjm-css-advisor' ); ?></span>
+												</label>
+												<label class="rjm-css-menu-option is-check">
+													<input type="checkbox" class="rjm-css-breakpoint-input" value="tablet" />
+													<span><?php esc_html_e( 'Tablet', 'rjm-css-advisor' ); ?></span>
+												</label>
+												<label class="rjm-css-menu-option is-check">
+													<input type="checkbox" class="rjm-css-breakpoint-input" value="desktop" />
+													<span><?php esc_html_e( 'Desktop', 'rjm-css-advisor' ); ?></span>
+												</label>
+											</div>
+										</div>
+									</div>
+
+									<div class="rjm-css-composer-submit">
+										<button type="button" class="button rjm-css-plan-generate-btn" hidden>
+											<?php esc_html_e( 'Generate CSS from plan', 'rjm-css-advisor' ); ?>
+										</button>
+										<button type="button" class="rjm-css-send-btn rjm-css-generate-btn" title="<?php esc_attr_e( 'Generate CSS', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Generate CSS', 'rjm-css-advisor' ); ?>">
+											<span aria-hidden="true">↑</span>
+										</button>
+										<button type="button" class="rjm-css-send-btn is-stop rjm-css-plan-stop-btn" title="<?php esc_attr_e( 'Stop', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Stop', 'rjm-css-advisor' ); ?>" hidden>
+											<span aria-hidden="true">■</span>
+										</button>
+									</div>
 								</div>
-							</fieldset>
-							<div class="rjm-css-goal-actions">
-								<button type="button" class="button button-primary rjm-css-generate-btn">
-									<?php esc_html_e( 'Generate CSS ✨', 'rjm-css-advisor' ); ?>
-								</button>
-								<button type="button" class="button rjm-css-plan-stop-btn" hidden>
-									<?php esc_html_e( 'Stop', 'rjm-css-advisor' ); ?>
-								</button>
-								<button type="button" class="button rjm-css-advisor-close">
-									<?php esc_html_e( '✕ Cancel', 'rjm-css-advisor' ); ?>
-								</button>
 							</div>
+
+							<button type="button" class="button-link rjm-css-screenshot-clear" hidden>
+								<?php esc_html_e( 'Clear screenshots', 'rjm-css-advisor' ); ?>
+							</button>
+							<p class="rjm-css-screenshot-error rjm-error" role="alert" hidden></p>
 						</div>
 					</div>
 
@@ -260,16 +315,10 @@ class RJM_CSS_Advisor_ACF_Integration {
 							<button type="button" class="button rjm-css-build-action" data-decision="skip"><?php esc_html_e( 'Skip step', 'rjm-css-advisor' ); ?></button>
 						</div>
 
-						<!-- Step 2: Actions -->
+						<!-- Step 2: Actions (Generate/Build results only) -->
 						<div class="rjm-css-advisor-actions" hidden>
-							<button type="button" class="button button-primary rjm-css-plan-generate-btn" hidden>
-								<?php esc_html_e( 'Generate CSS from plan', 'rjm-css-advisor' ); ?>
-							</button>
 							<button type="button" class="button rjm-css-advisor-tryagain">
 								<?php esc_html_e( '↻ Try again', 'rjm-css-advisor' ); ?>
-							</button>
-							<button type="button" class="button rjm-css-advisor-close">
-								<?php esc_html_e( '✕ Close', 'rjm-css-advisor' ); ?>
 							</button>
 						</div>
 					</div>

@@ -21,7 +21,6 @@
 	$(document).ready(function () {
 		$(document).on('click',   '.rjm-css-advisor-btn',      onOpenClick);
 		$(document).on('click',   '.rjm-css-generate-btn',     onGenerateClick);
-		$(document).on('click',   '.rjm-css-goal-toggle',      onGoalToggleClick);
 		$(document).on('click',   '.rjm-css-plan-generate-btn', onPlanGenerateClick);
 		$(document).on('click',   '.rjm-css-plan-stop-btn',    onPlanStopClick);
 		$(document).on('click',   '.rjm-css-build-action',     onBuildActionClick);
@@ -101,12 +100,6 @@
 		var $wrap = $(this).closest('.rjm-css-advisor-wrap');
 		var $panel = getPanelFromWrap($wrap);
 		generateFromPlan($wrap, $panel);
-	}
-
-	function onGoalToggleClick(e) {
-		e.preventDefault();
-		var $panel = $(e.currentTarget).closest('.rjm-css-advisor-panel');
-		setGoalFormExpanded($panel, $panel.find('.rjm-css-goal-form').hasClass('is-collapsed'));
 	}
 
 	function onBuildActionClick(e) {
@@ -293,7 +286,6 @@
 	function generateCSS($wrap, $panel, goal, breakpoints) {
 		var reqCtx = collectRequestContext($wrap);
 
-		var $goalForm = $panel.find('.rjm-css-goal-form');
 		var $loading  = $panel.find('.rjm-css-advisor-loading');
 		var $content  = $panel.find('.rjm-css-advisor-content');
 		var $actions  = $panel.find('.rjm-css-advisor-actions');
@@ -304,7 +296,6 @@
 		var ajaxUrl = (cfg.ajaxUrl || '').replace(/^https?:\/\/[^\/]+/, window.location.origin);
 
 		// Switch to loading state.
-		$goalForm.attr('hidden', true);
 		$loading.removeAttr('hidden');
 		$content.html('');
 		$actions.attr('hidden', true);
@@ -763,8 +754,6 @@
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
 		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
-		setGoalFormExpanded($panel, true);
-		setResultsPriorityState($panel, false);
 		updateModeUI($panel);
 		$panel.find('.rjm-css-goal-input').focus();
 	}
@@ -794,8 +783,6 @@
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
-		setGoalFormExpanded($panel, true);
-		setResultsPriorityState($panel, false);
 		$wrap.find('.rjm-css-advisor-btn').first()
 			.removeAttr('hidden')
 			.text(cfg.i18n.buttonLabel)
@@ -817,8 +804,6 @@
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		abortPlanStream($panel);
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
-		setGoalFormExpanded($panel, true);
-		setResultsPriorityState($panel, false);
 		$wrap.find('.rjm-css-advisor-btn').first().attr('hidden', true);
 		$wrap.find('.rjm-css-advisor-btn').first().attr('aria-expanded', 'true');
 		updateModeUI($panel);
@@ -932,8 +917,6 @@
 		var isChat = mode === 'ask';
 		var label;
 
-		$panel.toggleClass('is-chat-mode', isChat);
-
 		if (isChat) {
 			label = cfg.i18n.sendPlanBtn || 'Send message';
 		} else if (mode === 'build') {
@@ -947,6 +930,7 @@
 		$panel.find('.rjm-css-mode-menu .rjm-css-menu-label').text(getModeLabel(mode));
 		updateBreakpointMenuLabel($panel);
 
+		// Screenshots are Ask-only — the generate and build endpoints do not accept them.
 		$panel.find('.rjm-css-screenshot-controls').attr('hidden', !isChat || null);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', (isChat && isPlanReady) ? null : true);
 
@@ -955,25 +939,22 @@
 			$panel.find('.rjm-css-advisor-actions').attr('hidden', true);
 		}
 
-		$panel.find('.rjm-css-goal-header').attr('hidden', isChat || null);
-
-		if (isChat) {
-			setResultsPriorityState($panel, true);
-			renderChatEmptyState($panel);
-		}
+		setResultsPriorityState($panel, true);
+		renderEmptyState($panel, mode);
 	}
 
-	function renderChatEmptyState($panel) {
+	function renderEmptyState($panel, mode) {
 		var $content = $panel.find('.rjm-css-advisor-content');
-		if ($content.children('.rjm-plan-transcript').length || $content.children('.rjm-css-chat-empty').length) {
+		if (!$content.length || $.trim($content.html()) !== '') {
 			return;
 		}
 
+		var copy = getEmptyStateCopy(mode);
 		var examples = (cfg.i18n && cfg.i18n.examplePrompts) || [];
 		var $empty = $('<div class="rjm-css-chat-empty"></div>');
 
-		$empty.append($('<p class="rjm-css-chat-empty-title"></p>').text(cfg.i18n.emptyTitle || 'Describe the styling you want'));
-		$empty.append($('<p class="rjm-css-chat-empty-hint"></p>').text(cfg.i18n.emptyHint || 'Ask questions and refine the plan before generating CSS.'));
+		$empty.append($('<p class="rjm-css-chat-empty-title"></p>').text(copy.title));
+		$empty.append($('<p class="rjm-css-chat-empty-hint"></p>').text(copy.hint));
 
 		if (examples.length) {
 			var $chips = $('<div class="rjm-css-chat-examples"></div>');
@@ -983,7 +964,28 @@
 			$empty.append($chips);
 		}
 
-		$content.empty().append($empty);
+		$content.append($empty);
+	}
+
+	function getEmptyStateCopy(mode) {
+		if (mode === 'generate') {
+			return {
+				title: cfg.i18n.emptyTitleGenerate || 'Describe the CSS you want',
+				hint: cfg.i18n.emptyHintGenerate || 'Write one clear instruction and the CSS is generated in a single pass.',
+			};
+		}
+
+		if (mode === 'build') {
+			return {
+				title: cfg.i18n.emptyTitleBuild || 'Describe what to build',
+				hint: cfg.i18n.emptyHintBuild || 'The work is split into small steps you can approve, revise, or skip.',
+			};
+		}
+
+		return {
+			title: cfg.i18n.emptyTitle || 'Describe the styling you want',
+			hint: cfg.i18n.emptyHint || 'Ask questions and refine the plan before generating CSS.',
+		};
 	}
 
 	function onExampleChipClick(e) {
@@ -1022,7 +1024,6 @@
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
-		setResultsPriorityState($panel, false);
 	}
 
 	function abortPlanStream($panel) {
@@ -1032,31 +1033,6 @@
 		}
 		removeThinkingBubble($panel.find('.rjm-plan-message.is-thinking'));
 		setStreamingState($panel, false, null);
-	}
-
-	function setGoalFormExpanded($panel, expanded) {
-		var $goalForm = $panel.find('.rjm-css-goal-form');
-		var $goalBody = $goalForm.find('.rjm-css-goal-body');
-		var $toggle = $goalForm.find('.rjm-css-goal-toggle');
-		var $toggleIcon = $toggle.find('.rjm-css-goal-toggle-icon');
-		var $toggleText = $toggle.find('.rjm-css-goal-toggle-text');
-
-		if (expanded) {
-			$goalForm.removeClass('is-collapsed');
-			$goalBody.removeAttr('hidden');
-			$toggle.attr('aria-expanded', 'true');
-			$toggle.attr('aria-label', cfg.i18n.reduceGoalBtn || 'Reduce');
-			$toggleIcon.text('▾');
-			$toggleText.text(cfg.i18n.reduceGoalBtn || 'Reduce');
-			return;
-		}
-
-		$goalForm.addClass('is-collapsed');
-		$goalBody.attr('hidden', true);
-		$toggle.attr('aria-expanded', 'false');
-		$toggle.attr('aria-label', cfg.i18n.expandGoalBtn || 'Expand');
-		$toggleIcon.text('▸');
-		$toggleText.text(cfg.i18n.expandGoalBtn || 'Expand');
 	}
 
 	function normalizeAjaxUrl() {
@@ -1069,12 +1045,10 @@
 	}
 
 	function setLoadingState($panel, loadingText) {
-		var $goalForm = $panel.find('.rjm-css-goal-form');
 		var $loading = $panel.find('.rjm-css-advisor-loading');
 		var $content = $panel.find('.rjm-css-advisor-content');
 		var $actions = $panel.find('.rjm-css-advisor-actions');
 
-		$goalForm.attr('hidden', true);
 		$loading.html('<span class="spinner is-active" style="float:none;margin:0 8px 0 0;"></span>' + escHtml(loadingText || cfg.i18n.generating || 'Generating CSS…')).removeAttr('hidden');
 		$content.html('');
 		$actions.attr('hidden', true);
@@ -1083,7 +1057,6 @@
 
 	function clearLoadingState($panel) {
 		$panel.find('.rjm-css-advisor-loading').attr('hidden', true);
-		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
 	}
 
 	function renderError($panel, message) {

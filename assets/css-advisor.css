@@ -52,14 +52,11 @@
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 	margin-top: 10px;
 	max-height: 720px;
+	min-height: 460px;
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
 	resize: vertical;
-}
-
-.rjm-css-advisor-panel.is-chat-mode {
-	min-height: 460px;
 }
 
 .rjm-css-advisor-panel[hidden] {
@@ -180,7 +177,9 @@
 /* Keeps chat lines readable rather than stretching across a wide monitor. */
 .rjm-css-advisor-panel.is-fullscreen .rjm-plan-transcript,
 .rjm-css-advisor-panel.is-fullscreen .rjm-css-composer,
-.rjm-css-advisor-panel.is-fullscreen .rjm-css-chat-empty {
+.rjm-css-advisor-panel.is-fullscreen .rjm-css-chat-empty,
+.rjm-css-advisor-panel.is-fullscreen .rjm-css-advisor-content > *,
+.rjm-css-advisor-panel.is-fullscreen .rjm-css-advisor-loading {
 	margin-left: auto;
 	margin-right: auto;
 	max-width: 820px;
@@ -391,60 +390,6 @@ body.rjm-css-advisor-locked {
 
 .rjm-css-goal-form[hidden] {
 	display: none;
-}
-
-.rjm-css-goal-header[hidden] {
-	display: none !important;
-}
-
-.rjm-css-goal-label {
-	color: #1d2327;
-	display: block;
-	font-size: 13px;
-	font-weight: 600;
-	margin-bottom: 8px;
-}
-
-.rjm-css-goal-header {
-	align-items: center;
-	display: flex;
-	gap: 10px;
-	justify-content: space-between;
-	margin-bottom: 8px;
-}
-
-.rjm-css-goal-header .rjm-css-goal-label {
-	margin-bottom: 0;
-}
-
-.rjm-css-goal-toggle {
-	align-items: center;
-	color: #3858e9;
-	display: inline-flex;
-	font-size: 12px;
-	font-weight: 600;
-	gap: 4px;
-	line-height: 1;
-	text-decoration: none;
-}
-
-.rjm-css-goal-toggle:hover,
-.rjm-css-goal-toggle:focus {
-	color: #1d4ed8;
-	text-decoration: none;
-}
-
-.rjm-css-goal-toggle-icon {
-	font-size: 10px;
-	line-height: 1;
-}
-
-.rjm-css-goal-body[hidden] {
-	display: none !important;
-}
-
-.rjm-css-goal-form.is-collapsed {
-	padding-bottom: 10px;
 }
 
 .rjm-css-goal-input {

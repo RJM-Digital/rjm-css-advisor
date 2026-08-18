@@ -96,8 +96,6 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'copyBtn'         => __( 'Copy', 'rjm-css-advisor' ),
 					'copiedBtn'       => __( 'Copied!', 'rjm-css-advisor' ),
 					'insertBtn'       => __( '↑ Insert into field', 'rjm-css-advisor' ),
-					'expandGoalBtn'   => __( 'Expand', 'rjm-css-advisor' ),
-					'reduceGoalBtn'   => __( 'Reduce', 'rjm-css-advisor' ),
 					'screenshotTooLarge' => __( 'Screenshot is too large. Please choose an image under 4 MB.', 'rjm-css-advisor' ),
 					'screenshotInvalid'  => __( 'Please choose a PNG, JPEG, or WebP image.', 'rjm-css-advisor' ),
 					'screenshotRemove'   => __( 'Remove screenshot', 'rjm-css-advisor' ),
@@ -117,6 +115,10 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'breakpointDesktop' => __( 'Desktop', 'rjm-css-advisor' ),
 					'emptyTitle'        => __( 'Describe the styling you want', 'rjm-css-advisor' ),
 					'emptyHint'         => __( 'Ask questions and refine the plan, then generate the CSS when you are happy.', 'rjm-css-advisor' ),
+					'emptyTitleGenerate' => __( 'Describe the CSS you want', 'rjm-css-advisor' ),
+					'emptyHintGenerate'  => __( 'Write one clear instruction and the CSS is generated in a single pass.', 'rjm-css-advisor' ),
+					'emptyTitleBuild'    => __( 'Describe what to build', 'rjm-css-advisor' ),
+					'emptyHintBuild'     => __( 'The work is split into small steps you can approve, revise, or skip.', 'rjm-css-advisor' ),
 					'examplePrompts'    => [
 						__( 'Make the heading navy blue at 2rem', 'rjm-css-advisor' ),
 						__( 'Add more padding below this section on mobile', 'rjm-css-advisor' ),
@@ -197,15 +199,6 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 					<!-- Step 1: Goal entry form -->
 					<div class="rjm-css-goal-form">
-						<div class="rjm-css-goal-header">
-							<label for="<?php echo esc_attr( $goal_id ); ?>" class="rjm-css-goal-label">
-								<?php esc_html_e( 'Describe what you want to achieve:', 'rjm-css-advisor' ); ?>
-							</label>
-							<button type="button" class="button-link rjm-css-goal-toggle" aria-expanded="true" aria-label="<?php esc_attr_e( 'Reduce', 'rjm-css-advisor' ); ?>">
-								<span class="rjm-css-goal-toggle-icon" aria-hidden="true">▾</span>
-								<span class="rjm-css-goal-toggle-text"><?php esc_html_e( 'Reduce', 'rjm-css-advisor' ); ?></span>
-							</button>
-						</div>
 						<div class="rjm-css-goal-body">
 							<div class="rjm-css-composer">
 								<div class="rjm-css-screenshot-preview" hidden></div>
@@ -213,6 +206,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 									id="<?php echo esc_attr( $goal_id ); ?>"
 									class="rjm-css-goal-input"
 									rows="2"
+									aria-label="<?php esc_attr_e( 'Describe what you want to achieve', 'rjm-css-advisor' ); ?>"
 									placeholder="<?php esc_attr_e( 'Describe what you want to achieve…', 'rjm-css-advisor' ); ?>"
 								></textarea>
 

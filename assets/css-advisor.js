@@ -23,6 +23,7 @@
 		$(document).on('click',   '.rjm-css-generate-btn',     onGenerateClick);
 		$(document).on('click',   '.rjm-css-goal-toggle',      onGoalToggleClick);
 		$(document).on('click',   '.rjm-css-plan-generate-btn', onPlanGenerateClick);
+		$(document).on('click',   '.rjm-css-plan-stop-btn',    onPlanStopClick);
 		$(document).on('click',   '.rjm-css-build-action',     onBuildActionClick);
 		$(document).on('change',  '.rjm-css-mode-input',       onModeChange);
 		$(document).on('click',   '.rjm-css-advisor-tryagain', onTryAgainClick);
@@ -319,49 +320,269 @@
 
 	function sendPlanMessage($wrap, $panel, message, breakpoints) {
 		var reqCtx = collectRequestContext($wrap);
-		var sessionId = $panel.data('planSessionId') || '';
 		var screenshots = $panel.data('pendingScreenshots') || [];
-		var ajaxUrl = normalizeAjaxUrl();
 
-		setLoadingState($panel, cfg.i18n.planning || cfg.i18n.generating);
+		// Chat mode keeps the composer on screen and appends to the transcript.
+		setResultsPriorityState($panel, true);
+		$panel.find('.rjm-css-advisor-actions').removeAttr('hidden');
+		appendMessageBubble($panel, 'user', message, screenshots);
+		$panel.find('.rjm-css-goal-input').val('').focus();
+		clearPendingScreenshot($panel);
+
+		var payload = {
+			layout: reqCtx.layoutName,
+			field: reqCtx.fieldName,
+			field_key: reqCtx.fieldKey,
+			post_id: reqCtx.postId,
+			current_css: reqCtx.currentCss,
+			is_global: reqCtx.isGlobal,
+			message: message,
+			screenshot_data: screenshots.map(function (screenshot) { return screenshot.data; }),
+			screenshot_name: screenshots.map(function (screenshot) { return screenshot.name; }),
+			session_id: $panel.data('planSessionId') || '',
+			breakpoints: breakpoints,
+		};
+
+		if (!canStream()) {
+			sendPlanMessageBlocking($panel, payload);
+			return;
+		}
+
+		streamPlanMessage($panel, payload);
+	}
+
+	function canStream() {
+		return Boolean(cfg.streamUrl && window.fetch && window.AbortController && window.ReadableStream && window.TextDecoder);
+	}
+
+	/**
+	 * Consume the SSE plan stream, appending tokens to a live assistant bubble.
+	 */
+	function streamPlanMessage($panel, payload) {
+		var controller = new AbortController();
+		var $thinking = appendThinkingBubble($panel);
+		var $bubble = null;
+		var text = '';
+		var pending = '';
+		var frame = null;
+		var settled = false;
+		var started = false;
+
+		setStreamingState($panel, true, controller);
+
+		function flush() {
+			frame = null;
+			if (!pending) {
+				return;
+			}
+			text += pending;
+			pending = '';
+			if (!$bubble) {
+				removeThinkingBubble($thinking);
+				$bubble = appendMessageBubble($panel, 'assistant', '');
+				$bubble.addClass('is-streaming');
+			}
+			setBubbleContent($bubble, text);
+			scrollTranscript($panel);
+		}
+
+		function queue(chunk) {
+			pending += chunk;
+			if (frame === null) {
+				frame = window.requestAnimationFrame(flush);
+			}
+		}
+
+		function finish() {
+			if (frame !== null) {
+				window.cancelAnimationFrame(frame);
+			}
+			flush();
+			if ($bubble) {
+				$bubble.removeClass('is-streaming');
+			}
+			removeThinkingBubble($thinking);
+			setStreamingState($panel, false, null);
+		}
+
+		function fail(message) {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			finish();
+			// Nothing rendered yet means the stream never worked — retry over admin-ajax.
+			if (!started) {
+				if ($bubble) {
+					$bubble.remove();
+				}
+				sendPlanMessageBlocking($panel, payload);
+				return;
+			}
+			appendNoticeBubble($panel, message);
+		}
+
+		window.fetch(normalizeUrl(cfg.streamUrl), {
+			method: 'POST',
+			credentials: 'same-origin',
+			signal: controller.signal,
+			headers: {
+				'Content-Type': 'application/json',
+				'X-WP-Nonce': cfg.restNonce || '',
+			},
+			body: JSON.stringify(payload),
+		}).then(function (response) {
+			if (!response.ok || !response.body) {
+				throw new Error(response.statusText || 'Request failed');
+			}
+
+			var reader = response.body.getReader();
+			var decoder = new TextDecoder();
+			var buffer = '';
+
+			function read() {
+				return reader.read().then(function (result) {
+					if (result.done) {
+						if (!settled) {
+							settled = true;
+							finish();
+						}
+						return;
+					}
+
+					buffer += decoder.decode(result.value, { stream: true });
+
+					var split;
+					while ((split = buffer.indexOf('\n\n')) !== -1) {
+						var raw = buffer.slice(0, split);
+						buffer = buffer.slice(split + 2);
+						var event = parseSseFrame(raw);
+						if (!event) {
+							continue;
+						}
+
+						if (event.name === 'delta' && typeof event.data.text === 'string') {
+							started = true;
+							queue(event.data.text);
+						} else if (event.name === 'open') {
+							$panel.data('planSessionId', event.data.session_id || '');
+						} else if (event.name === 'done') {
+							settled = true;
+							$panel.data('planSessionId', event.data.session_id || '');
+							$panel.data('planReady', Boolean(event.data.ready_to_generate));
+							finish();
+							updateModeUI($panel);
+							renderPlanReadyNote($panel, event.data.ready_to_generate);
+							return;
+						} else if (event.name === 'error') {
+							settled = true;
+							fail(event.data.message || 'Request failed');
+							return;
+						}
+					}
+
+					return read();
+				});
+			}
+
+			return read();
+		}).catch(function (error) {
+			if (controller.signal.aborted) {
+				return;
+			}
+			fail(error && error.message ? error.message : 'Request failed');
+		});
+	}
+
+	function parseSseFrame(raw) {
+		var name = 'message';
+		var data = '';
+
+		raw.split('\n').forEach(function (line) {
+			if (line.indexOf('event:') === 0) {
+				name = line.slice(6).trim();
+			} else if (line.indexOf('data:') === 0) {
+				data += line.slice(5).trim();
+			}
+		});
+
+		if (!data) {
+			return null;
+		}
+
+		try {
+			return { name: name, data: JSON.parse(data) };
+		} catch (e) {
+			return null;
+		}
+	}
+
+	function onPlanStopClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var controller = $panel.data('planAbort');
+		if (controller) {
+			controller.abort();
+		}
+		var $streaming = $panel.find('.rjm-plan-message.is-streaming');
+		$streaming.removeClass('is-streaming').addClass('is-stopped');
+		removeThinkingBubble($panel.find('.rjm-plan-message.is-thinking'));
+		setStreamingState($panel, false, null);
+	}
+
+	function setStreamingState($panel, isStreaming, controller) {
+		if (controller) {
+			$panel.data('planAbort', controller);
+		} else {
+			$panel.removeData('planAbort');
+		}
+
+		$panel.find('.rjm-css-generate-btn').prop('disabled', isStreaming);
+		if (isStreaming) {
+			$panel.find('.rjm-css-plan-stop-btn').removeAttr('hidden');
+		} else {
+			$panel.find('.rjm-css-plan-stop-btn').attr('hidden', true);
+		}
+	}
+
+	/**
+	 * Non-streaming fallback used when SSE is unavailable or fails before any token arrives.
+	 */
+	function sendPlanMessageBlocking($panel, payload) {
+		var $thinking = appendThinkingBubble($panel);
 
 		$.ajax({
-			url: ajaxUrl,
+			url: normalizeAjaxUrl(),
 			type: 'POST',
-			data: {
+			data: $.extend({}, payload, {
 				action: 'rjm_plan_css_chat',
 				nonce: cfg.nonce,
-				layout: reqCtx.layoutName,
-				field: reqCtx.fieldName,
-				field_key: reqCtx.fieldKey,
-				post_id: reqCtx.postId,
-				current_css: reqCtx.currentCss,
-				is_global: reqCtx.isGlobal ? '1' : '0',
-				message: message,
-				screenshot_data: screenshots.map(function (screenshot) { return screenshot.data; }),
-				screenshot_name: screenshots.map(function (screenshot) { return screenshot.name; }),
-				screenshot_type: screenshots.map(function (screenshot) { return screenshot.type; }),
-				session_id: sessionId,
-				breakpoints: breakpoints,
-			},
+				is_global: payload.is_global ? '1' : '0',
+			}),
 			success: function (response) {
-				clearLoadingState($panel);
+				removeThinkingBubble($thinking);
 				if (!response.success) {
-					renderError($panel, response.data && response.data.message ? response.data.message : 'Unknown error.');
+					appendNoticeBubble($panel, (response.data && response.data.message) || 'Unknown error.');
 					return;
 				}
 
 				var data = response.data || {};
 				$panel.data('planSessionId', data.session_id || '');
 				$panel.data('planReady', Boolean(data.ready_to_generate));
-				renderPlanTranscript($panel, data.transcript_html || '', data.ready_to_generate);
-				clearPendingScreenshot($panel);
+
+				var messages = data.messages || [];
+				var last = messages.length ? messages[messages.length - 1] : null;
+				if (last && last.role === 'assistant') {
+					setBubbleContent(appendMessageBubble($panel, 'assistant', ''), last.content || '');
+				}
+
 				updateModeUI($panel);
-				$panel.find('.rjm-css-goal-input').val('').focus();
+				renderPlanReadyNote($panel, data.ready_to_generate);
+				scrollTranscript($panel);
 			},
 			error: function (xhr) {
-				clearLoadingState($panel);
-				renderError($panel, xhr.statusText || 'Request failed');
+				removeThinkingBubble($thinking);
+				appendNoticeBubble($panel, xhr.statusText || 'Request failed');
 			},
 		});
 	}
@@ -537,6 +758,7 @@
 	function closePanel($wrap, $panel) {
 		$panel.attr('hidden', true);
 		// Reset panel to initial state so it opens cleanly next time.
+		abortPlanStream($panel);
 		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
 		$panel.find('.rjm-css-advisor-loading').attr('hidden', true);
 		$panel.find('.rjm-css-advisor-content').html('');
@@ -566,6 +788,7 @@
 		$panel.find('.rjm-css-build-actions').attr('hidden', true);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
+		abortPlanStream($panel);
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
 		setGoalFormExpanded($panel, true);
 		setResultsPriorityState($panel, false);
@@ -623,6 +846,7 @@
 	}
 
 	function resetModeState($panel) {
+		abortPlanStream($panel);
 		$panel.find('.rjm-css-advisor-content').html('');
 		$panel.find('.rjm-css-advisor-actions').attr('hidden', true);
 		$panel.find('.rjm-css-build-actions').attr('hidden', true);
@@ -630,6 +854,15 @@
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
 		setResultsPriorityState($panel, false);
+	}
+
+	function abortPlanStream($panel) {
+		var controller = $panel.data('planAbort');
+		if (controller) {
+			controller.abort();
+		}
+		removeThinkingBubble($panel.find('.rjm-plan-message.is-thinking'));
+		setStreamingState($panel, false, null);
 	}
 
 	function setGoalFormExpanded($panel, expanded) {
@@ -658,7 +891,12 @@
 	}
 
 	function normalizeAjaxUrl() {
-		return (cfg.ajaxUrl || '').replace(/^https?:\/\/[^\/]+/, window.location.origin);
+		return normalizeUrl(cfg.ajaxUrl);
+	}
+
+	// Rewrite to the served origin so a mismatched siteurl option does not trip CORS.
+	function normalizeUrl(url) {
+		return (url || '').replace(/^https?:\/\/[^\/]+/, window.location.origin);
 	}
 
 	function setLoadingState($panel, loadingText) {
@@ -685,14 +923,166 @@
 		$panel.find('.rjm-css-advisor-actions').removeAttr('hidden');
 	}
 
-	function renderPlanTranscript($panel, transcriptHtml, readyToGenerate) {
-		var html = '' + transcriptHtml;
-		if (readyToGenerate) {
-			html += '<p class="rjm-plan-ready">Plan is ready. Click "' + escHtml(cfg.i18n.generatePlanBtn || 'Generate CSS from plan') + '" when you are happy.</p>';
+	// -------------------------------------------------------------------------
+	// Ask/Plan transcript — owned by the client so messages can stream in
+	// -------------------------------------------------------------------------
+
+	function ensureTranscript($panel) {
+		var $content = $panel.find('.rjm-css-advisor-content');
+		var $transcript = $content.children('.rjm-plan-transcript');
+
+		if (!$transcript.length) {
+			$content.empty();
+			$transcript = $('<div class="rjm-plan-transcript"></div>').appendTo($content);
+			$content.off('scroll.rjmPlan').on('scroll.rjmPlan', function () {
+				var el = this;
+				$panel.data('planPinned', el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+			});
+			$panel.data('planPinned', true);
 		}
-		$panel.find('.rjm-css-advisor-content').html(html);
-		setResultsPriorityState($panel, true);
-		$panel.find('.rjm-css-advisor-actions').removeAttr('hidden');
+
+		return $transcript;
+	}
+
+	function appendMessageBubble($panel, role, content, screenshots) {
+		var $transcript = ensureTranscript($panel);
+		var $bubble = $('<div></div>').addClass('rjm-plan-message').addClass(role === 'user' ? 'is-user' : 'is-assistant');
+
+		(screenshots || []).forEach(function (screenshot) {
+			$('<div class="rjm-plan-screenshot"></div>')
+				.append($('<img alt="" />').attr('src', screenshot.data))
+				.appendTo($bubble);
+		});
+
+		$bubble.append($('<div class="rjm-plan-message-body"></div>'));
+		$transcript.append($bubble);
+
+		if (content) {
+			setBubbleContent($bubble, content);
+		}
+
+		scrollTranscript($panel, true);
+		return $bubble;
+	}
+
+	function setBubbleContent($bubble, text) {
+		$bubble.children('.rjm-plan-message-body').html(renderMarkdown(text));
+	}
+
+	function appendThinkingBubble($panel) {
+		var statuses = (cfg.i18n && cfg.i18n.thinkingStatuses) || [cfg.i18n.planning || 'Thinking…'];
+		var $bubble = $('<div class="rjm-plan-message is-assistant is-thinking"></div>');
+		var $status = $('<span class="rjm-thinking-status"></span>').text(statuses[0]);
+
+		$bubble.append('<span class="rjm-thinking-dots"><span></span><span></span><span></span></span>').append($status);
+		ensureTranscript($panel).append($bubble);
+
+		var index = 0;
+		var timer = window.setInterval(function () {
+			index = (index + 1) % statuses.length;
+			$status.text(statuses[index]);
+		}, 2600);
+		$bubble.data('statusTimer', timer);
+
+		scrollTranscript($panel, true);
+		return $bubble;
+	}
+
+	function removeThinkingBubble($bubble) {
+		if (!$bubble || !$bubble.length) {
+			return;
+		}
+		window.clearInterval($bubble.data('statusTimer'));
+		$bubble.remove();
+	}
+
+	function appendNoticeBubble($panel, message) {
+		ensureTranscript($panel).append(
+			$('<p class="rjm-error"></p>').text((cfg.i18n.errorPrefix || 'Error: ') + message)
+		);
+		scrollTranscript($panel, true);
+	}
+
+	function renderPlanReadyNote($panel, readyToGenerate) {
+		var $transcript = ensureTranscript($panel);
+		$transcript.find('.rjm-plan-ready').remove();
+		if (!readyToGenerate) {
+			return;
+		}
+		$transcript.append(
+			$('<p class="rjm-plan-ready"></p>').text(
+				'Plan is ready. Click "' + (cfg.i18n.generatePlanBtn || 'Generate CSS from plan') + '" when you are happy.'
+			)
+		);
+		scrollTranscript($panel);
+	}
+
+	function scrollTranscript($panel, force) {
+		if (!force && $panel.data('planPinned') === false) {
+			return;
+		}
+		var content = $panel.find('.rjm-css-advisor-content')[0];
+		if (content) {
+			content.scrollTop = content.scrollHeight;
+		}
+		$panel.data('planPinned', true);
+	}
+
+	/**
+	 * Minimal Markdown renderer. Input is escaped first, so only the tags
+	 * produced below can ever reach the DOM.
+	 */
+	function renderMarkdown(text) {
+		var blocks = [];
+
+		// Park fenced code blocks before any inline processing touches them.
+		var escaped = escHtml(String(text || '')).replace(/```([a-z]*)\n?([\s\S]*?)```/gi, function (match, lang, code) {
+			blocks.push('<pre class="rjm-code-block"><code>' + code.replace(/\n$/, '') + '</code></pre>');
+			return '\u0000BLOCK' + (blocks.length - 1) + '\u0000';
+		});
+
+		var html = escaped.split(/\n{2,}/).map(function (chunk) {
+			chunk = chunk.trim();
+			if (!chunk) {
+				return '';
+			}
+
+			if (/^\u0000BLOCK\d+\u0000$/.test(chunk)) {
+				return chunk;
+			}
+
+			var lines = chunk.split('\n');
+
+			if (lines.every(function (line) { return /^\s*[-*]\s+/.test(line); })) {
+				return '<ul>' + lines.map(function (line) {
+					return '<li>' + inlineMarkdown(line.replace(/^\s*[-*]\s+/, '')) + '</li>';
+				}).join('') + '</ul>';
+			}
+
+			if (lines.every(function (line) { return /^\s*\d+[.)]\s+/.test(line); })) {
+				return '<ol>' + lines.map(function (line) {
+					return '<li>' + inlineMarkdown(line.replace(/^\s*\d+[.)]\s+/, '')) + '</li>';
+				}).join('') + '</ol>';
+			}
+
+			var heading = chunk.match(/^(#{1,4})\s+(.*)$/);
+			if (heading) {
+				return '<h4>' + inlineMarkdown(heading[2]) + '</h4>';
+			}
+
+			return '<p>' + inlineMarkdown(chunk).replace(/\n/g, '<br />') + '</p>';
+		}).join('');
+
+		return html.replace(/\u0000BLOCK(\d+)\u0000/g, function (match, index) {
+			return blocks[Number(index)] || '';
+		});
+	}
+
+	function inlineMarkdown(text) {
+		return text
+			.replace(/`([^`]+)`/g, '<code>$1</code>')
+			.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+			.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
 	}
 
 	function renderBuildStep($panel, step) {

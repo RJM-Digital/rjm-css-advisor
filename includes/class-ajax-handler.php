@@ -21,6 +21,7 @@ defined( 'ABSPATH' ) || exit;
 class RJM_CSS_Advisor_Ajax_Handler {
 
 	const SESSION_TTL = HOUR_IN_SECONDS;
+	const REST_NAMESPACE = 'rjm-css-advisor/v1';
 	const GLOBAL_CSS_FIELD_KEY = 'field_6964fb66b09f1';
 	const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 	const MAX_SCREENSHOT_WIDTH = 4096;
@@ -36,6 +37,27 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		add_action( 'wp_ajax_rjm_plan_css_generate', [ __CLASS__, 'handle_plan_generate' ] );
 		add_action( 'wp_ajax_rjm_build_css_start', [ __CLASS__, 'handle_build_start' ] );
 		add_action( 'wp_ajax_rjm_build_css_step',  [ __CLASS__, 'handle_build_step' ] );
+	}
+
+	/**
+	 * Register the streaming route. Must run outside is_admin(), which is false for REST.
+	 */
+	public static function init_rest() {
+		add_action( 'rest_api_init', [ __CLASS__, 'register_rest_routes' ] );
+	}
+
+	public static function register_rest_routes() {
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/plan-stream',
+			[
+				'methods'             => 'POST',
+				'callback'            => [ __CLASS__, 'handle_plan_stream' ],
+				'permission_callback' => static function () {
+					return current_user_can( 'edit_posts' );
+				},
+			]
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -251,9 +273,235 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		wp_send_json_success( [
 			'session_id'        => $session_id,
 			'transcript_html'   => self::render_plan_transcript( $session['messages'] ),
+			'messages'          => self::plan_messages_for_client( $session['messages'] ),
 			'ready_to_generate' => ! empty( $result['ready_to_generate'] ),
 			'brief'             => $session['brief'],
 		] );
+	}
+
+	// -------------------------------------------------------------------------
+	// Handler — Ask/Plan chat turn, streamed over Server-Sent Events
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Stream one Ask/Plan turn as SSE.
+	 *
+	 * Emits: open → delta* → done, or error. Always exits; never returns to the
+	 * REST server, which would try to send its own JSON response.
+	 *
+	 * @param WP_REST_Request $request
+	 * @return void
+	 */
+	public static function handle_plan_stream( $request ) {
+		$layout      = sanitize_key( (string) $request->get_param( 'layout' ) );
+		$field       = sanitize_key( (string) ( $request->get_param( 'field' ) ?: 'custom_css' ) );
+		$field_key   = sanitize_text_field( (string) $request->get_param( 'field_key' ) );
+		$is_global   = self::normalize_is_global_request( $field, $field_key, (bool) $request->get_param( 'is_global' ) );
+		$message     = sanitize_textarea_field( (string) $request->get_param( 'message' ) );
+		$session_id  = sanitize_text_field( (string) $request->get_param( 'session_id' ) );
+		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) $request->get_param( 'breakpoints' ) ) ) );
+		$post_id     = absint( $request->get_param( 'post_id' ) );
+		$current_css = self::sanitize_css_payload( $request->get_param( 'current_css' ) );
+		$screenshots = self::validate_screenshot_payloads(
+			$request->get_param( 'screenshot_data' ) ?? [],
+			$request->get_param( 'screenshot_name' ) ?? []
+		);
+
+		self::start_sse_stream();
+
+		self::log_debug_request( 'plan_stream', [
+			'layout'    => $layout,
+			'field'     => $field,
+			'is_global' => $is_global,
+			'field_key' => $field_key,
+			'post_id'   => $post_id,
+		] );
+
+		if ( ! $message ) {
+			self::sse_fail( __( 'Please enter a message for Ask/Plan mode.', 'rjm-css-advisor' ) );
+		}
+
+		if ( is_wp_error( $screenshots ) ) {
+			self::sse_fail( $screenshots->get_error_message() );
+		}
+
+		$scope  = self::build_memory_scope( $post_id, $field, $field_key, $layout, $is_global );
+		$memory = self::get_field_memory( $scope );
+		$existing_css_context = self::resolve_existing_css_context( $current_css, $memory );
+
+		if ( ! $session_id ) {
+			$session_id = wp_generate_uuid4();
+		}
+
+		$session = self::get_plan_session( $session_id );
+		if ( ! $session ) {
+			$session = [
+				'layout'      => $layout,
+				'field'       => $field,
+				'is_global'   => $is_global,
+				'breakpoints' => $breakpoints,
+				'messages'    => (array) ( $memory['chat_messages'] ?? [] ),
+				'brief'       => '',
+				'existing_css_context' => $existing_css_context,
+			];
+		}
+
+		if ( ! empty( $existing_css_context ) ) {
+			$session['existing_css_context'] = $existing_css_context;
+		}
+
+		if ( self::get_screenshot_bytes( $session['messages'] ) + self::get_screenshot_bytes( $screenshots ) > self::MAX_SCREENSHOT_SESSION_BYTES ) {
+			self::sse_fail( __( 'This plan session has reached its 50 MB screenshot limit. Remove some screenshots or start a new plan.', 'rjm-css-advisor' ) );
+		}
+
+		$user_message = [
+			'role'    => 'user',
+			'content' => $message,
+		];
+		if ( $screenshots ) {
+			$user_message['screenshots'] = $screenshots;
+		}
+		$session['messages'][] = $user_message;
+
+		self::sse_send( 'open', [ 'session_id' => $session_id ] );
+
+		$client = new RJM_CSS_Advisor_GitHub_Client();
+		$result = $client->plan_css_turn_stream(
+			$session['layout'],
+			$session['field'],
+			! empty( $session['is_global'] ),
+			$session['messages'],
+			$session['breakpoints'],
+			(string) ( $session['existing_css_context'] ?? '' ),
+			static function ( $chunk ) {
+				self::sse_send( 'delta', [ 'text' => $chunk ] );
+			}
+		);
+
+		if ( is_wp_error( $result ) ) {
+			self::log_debug_error( 'plan_stream', $result, [
+				'layout'    => $layout,
+				'field'     => $field,
+				'is_global' => $is_global,
+				'post_id'   => $post_id,
+			] );
+			self::sse_fail( $result->get_error_message(), $result->get_error_code() );
+		}
+
+		$assistant_message = trim( (string) ( $result['assistant_message'] ?? '' ) );
+		if ( $assistant_message ) {
+			$session['messages'][] = [
+				'role'    => 'assistant',
+				'content' => $assistant_message,
+			];
+		}
+
+		if ( ! empty( $result['brief'] ) ) {
+			$session['brief'] = trim( (string) $result['brief'] );
+		}
+
+		$memory['current_css']   = (string) ( $session['existing_css_context'] ?? '' );
+		$memory['chat_messages'] = self::strip_screenshots_from_messages( array_slice( (array) $session['messages'], -12 ) );
+		$memory['last_brief']    = (string) ( $session['brief'] ?? '' );
+		$memory['updated_at']    = time();
+		self::set_field_memory( $scope, $memory );
+
+		self::set_plan_session( $session_id, $session );
+
+		self::log_debug_success( 'plan_stream', [
+			'layout'            => $layout,
+			'field'             => $field,
+			'is_global'         => $is_global,
+			'field_key'         => $field_key,
+			'post_id'           => $post_id,
+			'session_id'        => $session_id,
+			'ready_to_generate' => ! empty( $result['ready_to_generate'] ),
+			'message_count'     => count( (array) $session['messages'] ),
+		] );
+
+		self::sse_send( 'done', [
+			'session_id'        => $session_id,
+			'message'           => $assistant_message,
+			'ready_to_generate' => ! empty( $result['ready_to_generate'] ),
+			'brief'             => (string) ( $session['brief'] ?? '' ),
+		] );
+
+		exit;
+	}
+
+	/**
+	 * Switch the response into an unbuffered SSE stream.
+	 */
+	private static function start_sse_stream() {
+		if ( ! headers_sent() ) {
+			header( 'Content-Type: text/event-stream; charset=utf-8' );
+			header( 'Cache-Control: no-cache, no-store, no-transform, must-revalidate' );
+			header( 'Connection: keep-alive' );
+			header( 'X-Accel-Buffering: no' );
+		}
+
+		@ini_set( 'zlib.output_compression', '0' );
+		@ini_set( 'output_buffering', 'off' );
+		@ini_set( 'implicit_flush', '1' );
+		@set_time_limit( 180 );
+		ignore_user_abort( false );
+
+		while ( ob_get_level() > 0 ) {
+			@ob_end_flush();
+		}
+
+		// Padding plus a comment frame push proxies into forwarding the stream immediately.
+		echo ':' . str_repeat( ' ', 2048 ) . "\n\n";
+		flush();
+	}
+
+	private static function sse_send( $event, $payload ) {
+		echo 'event: ' . $event . "\n";
+		echo 'data: ' . wp_json_encode( $payload ) . "\n\n";
+		flush();
+	}
+
+	/**
+	 * Emit a terminal error frame and stop.
+	 */
+	private static function sse_fail( $message, $code = 'plan_stream_error' ) {
+		self::sse_send( 'error', [
+			'message' => (string) $message,
+			'code'    => (string) $code,
+		] );
+		exit;
+	}
+
+	/**
+	 * Reduce stored messages to the shape the browser transcript needs.
+	 */
+	private static function plan_messages_for_client( $messages ) {
+		$out = [];
+
+		foreach ( (array) $messages as $message ) {
+			$role = ( ( $message['role'] ?? '' ) === 'user' ) ? 'user' : 'assistant';
+			$item = [
+				'role'    => $role,
+				'content' => (string) ( $message['content'] ?? '' ),
+			];
+
+			$screenshots = self::get_message_screenshots( $message );
+			if ( $screenshots ) {
+				$item['screenshots'] = array_map(
+					static function ( $screenshot ) {
+						return [
+							'data' => (string) ( $screenshot['data'] ?? '' ),
+							'name' => (string) ( $screenshot['name'] ?? '' ),
+						];
+					},
+					$screenshots
+				);
+			}
+
+			$out[] = $item;
+		}
+
+		return $out;
 	}
 
 	/**

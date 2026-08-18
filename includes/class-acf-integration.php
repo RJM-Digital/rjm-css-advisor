@@ -66,9 +66,11 @@ class RJM_CSS_Advisor_ACF_Integration {
 			'rjm-css-advisor',
 			'rjmCssAdvisor',
 			[
-				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-				'nonce'   => wp_create_nonce( 'rjm_css_advisor' ),
-				'postId'  => (int) get_the_ID(),
+				'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
+				'nonce'     => wp_create_nonce( 'rjm_css_advisor' ),
+				'streamUrl' => rest_url( RJM_CSS_Advisor_Ajax_Handler::REST_NAMESPACE . '/plan-stream' ),
+				'restNonce' => wp_create_nonce( 'wp_rest' ),
+				'postId'    => (int) get_the_ID(),
 				'i18n'    => [
 					'buttonLabel'     => __( 'Generate Custom CSS ✨', 'rjm-css-advisor' ),
 					'goalLabel'       => __( 'Describe what you want to achieve:', 'rjm-css-advisor' ),
@@ -101,6 +103,14 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'screenshotRemove'   => __( 'Remove screenshot', 'rjm-css-advisor' ),
 					'screenshotCount'   => __( '%1$d screenshots, %2$s total', 'rjm-css-advisor' ),
 					'screenshotLimit'   => __( 'You can attach up to 5 screenshots per message and 20 MB total.', 'rjm-css-advisor' ),
+					'stopBtn'           => __( 'Stop', 'rjm-css-advisor' ),
+					'stoppedNote'       => __( 'Stopped', 'rjm-css-advisor' ),
+					'thinkingStatuses'  => [
+						__( 'Thinking…', 'rjm-css-advisor' ),
+						__( 'Reading the component…', 'rjm-css-advisor' ),
+						__( 'Working through your plan…', 'rjm-css-advisor' ),
+						__( 'Almost there…', 'rjm-css-advisor' ),
+					],
 				],
 			]
 		);
@@ -222,6 +232,9 @@ class RJM_CSS_Advisor_ACF_Integration {
 							<div class="rjm-css-goal-actions">
 								<button type="button" class="button button-primary rjm-css-generate-btn">
 									<?php esc_html_e( 'Generate CSS ✨', 'rjm-css-advisor' ); ?>
+								</button>
+								<button type="button" class="button rjm-css-plan-stop-btn" hidden>
+									<?php esc_html_e( 'Stop', 'rjm-css-advisor' ); ?>
 								</button>
 								<button type="button" class="button rjm-css-advisor-close">
 									<?php esc_html_e( '✕ Cancel', 'rjm-css-advisor' ); ?>

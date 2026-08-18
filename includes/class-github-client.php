@@ -20,6 +20,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 	const COPILOT_API_BASE = 'https://api.githubcopilot.com';
 	const OPENAI_API_BASE  = 'https://api.openai.com/v1';
 
+	// Separates the planner's user-facing prose from its trailing metadata JSON.
+	const PLANNER_META_SENTINEL = '<<<RJM_META>>>';
+
 	// Map ACF layout name → React component filename (without path/extension).
 	const LAYOUT_TO_COMPONENT = [
 		'hero'                   => 'Hero',
@@ -136,6 +139,104 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @return array|WP_Error
 	 */
 	public function plan_css_turn( $layout_name, $field_name = 'custom_css', $is_global = false, $messages = [], $breakpoints = [], $existing_css_context = '' ) {
+		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$raw = $this->call_copilot_with_context(
+			$request['token'],
+			'CSS Planner',
+			$request['prompt'],
+			$request['system_prompt'],
+			$request['screenshots']
+		);
+
+		if ( is_wp_error( $raw ) ) {
+			$this->log_debug_error( 'plan_css_turn', $raw, [
+				'layout'    => $layout_name,
+				'field'     => $field_name,
+				'is_global' => $is_global,
+			] );
+			return $raw;
+		}
+
+		return self::split_planner_output( $raw );
+	}
+
+	/**
+	 * Run a planner turn, invoking $on_delta with user-facing prose as it arrives.
+	 *
+	 * The trailing metadata sentinel is withheld from $on_delta but still parsed
+	 * into the returned result.
+	 *
+	 * @param callable $on_delta  Receives each chunk of prose as a string.
+	 * @return array|WP_Error Same shape as plan_css_turn().
+	 */
+	public function plan_css_turn_stream( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, callable $on_delta ) {
+		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$sentinel     = self::PLANNER_META_SENTINEL;
+		$emitted      = 0;
+		$sentinel_hit = false;
+
+		// Hold back a tail long enough to recognise the sentinel before it is emitted.
+		$filter = function ( $full ) use ( $sentinel, &$emitted, &$sentinel_hit, $on_delta ) {
+			if ( $sentinel_hit ) {
+				return;
+			}
+
+			$position = strpos( $full, $sentinel );
+			if ( false !== $position ) {
+				$sentinel_hit = true;
+				$visible      = substr( $full, 0, $position );
+			} else {
+				$visible = substr( $full, 0, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
+			}
+
+			if ( strlen( $visible ) > $emitted ) {
+				$chunk   = substr( $visible, $emitted );
+				$emitted = strlen( $visible );
+				$on_delta( $chunk );
+			}
+		};
+
+		$raw = $this->call_ai_stream(
+			$request['token'],
+			$request['prompt'],
+			$request['system_prompt'],
+			$request['screenshots'],
+			$filter
+		);
+
+		if ( is_wp_error( $raw ) ) {
+			$this->log_debug_error( 'plan_css_turn_stream', $raw, [
+				'layout'    => $layout_name,
+				'field'     => $field_name,
+				'is_global' => $is_global,
+			] );
+			return $raw;
+		}
+
+		$result = self::split_planner_output( $raw );
+
+		// Flush any prose still held back by the lookahead window.
+		if ( ! $sentinel_hit && strlen( $result['assistant_message'] ) > $emitted ) {
+			$on_delta( substr( $result['assistant_message'], $emitted ) );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Assemble the token, prompt and system prompt for a planner turn.
+	 *
+	 * @return array|WP_Error
+	 */
+	private function build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context ) {
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
 			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
@@ -151,44 +252,57 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $context;
 		}
 
-		$conversation = $this->format_chat_messages_for_prompt( $messages );
-		$screenshot_data = $this->get_screenshot_data( $messages );
 		$prompt = "Selected breakpoints: " . implode( ', ', $this->normalize_selected_breakpoints( $breakpoints ) ) . "\n\n";
 		$prompt .= "Context:\n" . $context['context'] . "\n\n";
 		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
 		$prompt .= "\n\n";
-		$prompt .= "Conversation so far:\n" . $conversation;
+		$prompt .= "Conversation so far:\n" . $this->format_chat_messages_for_prompt( $messages );
 
-		$raw = $this->call_copilot_with_context(
-			$token,
-			'CSS Planner',
-			$prompt,
-			$this->get_css_planner_system_prompt(),
-			$screenshot_data
-		);
+		return [
+			'token'         => $token,
+			'prompt'        => $prompt,
+			'system_prompt' => $this->get_css_planner_system_prompt(),
+			'screenshots'   => $this->get_screenshot_data( $messages ),
+		];
+	}
 
-		if ( is_wp_error( $raw ) ) {
-			$this->log_debug_error( 'plan_css_turn', $raw, [
-				'layout'    => $layout_name,
-				'field'     => $field_name,
-				'is_global' => $is_global,
-			] );
-			return $raw;
+	/**
+	 * Split a planner reply into user-facing prose and its trailing metadata.
+	 *
+	 * Accepts the current sentinel format and the legacy all-JSON format.
+	 *
+	 * @param string $raw
+	 * @return array{assistant_message:string,ready_to_generate:bool,brief:string}
+	 */
+	public static function split_planner_output( $raw ) {
+		$raw  = (string) $raw;
+		$meta = [];
+
+		$position = strpos( $raw, self::PLANNER_META_SENTINEL );
+		if ( false !== $position ) {
+			$tail = substr( $raw, $position + strlen( self::PLANNER_META_SENTINEL ) );
+			$raw  = substr( $raw, 0, $position );
+
+			$decoded = json_decode( trim( self::strip_code_fences( $tail ) ), true );
+			if ( is_array( $decoded ) ) {
+				$meta = $decoded;
+			}
 		}
 
-		$decoded = json_decode( trim( self::strip_code_fences( $raw ) ), true );
-		if ( ! is_array( $decoded ) ) {
-			return [
-				'assistant_message' => trim( (string) $raw ),
-				'ready_to_generate' => false,
-				'brief' => '',
-			];
+		$message = trim( $raw );
+
+		if ( ! $meta ) {
+			$decoded = json_decode( trim( self::strip_code_fences( $message ) ), true );
+			if ( is_array( $decoded ) && isset( $decoded['assistant_message'] ) ) {
+				$meta    = $decoded;
+				$message = trim( (string) $decoded['assistant_message'] );
+			}
 		}
 
 		return [
-			'assistant_message' => trim( (string) ( $decoded['assistant_message'] ?? '' ) ),
-			'ready_to_generate' => ! empty( $decoded['ready_to_generate'] ),
-			'brief'             => trim( (string) ( $decoded['brief'] ?? '' ) ),
+			'assistant_message' => $message,
+			'ready_to_generate' => ! empty( $meta['ready_to_generate'] ),
+			'brief'             => trim( (string) ( $meta['brief'] ?? '' ) ),
 		];
 	}
 
@@ -532,6 +646,20 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 */
 	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = [] ) {
 		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
+		$body     = wp_json_encode( $this->build_chat_payload( $user_message, $system_prompt, $screenshot_data ) );
+
+		if ( $provider === 'openai' ) {
+			return $this->call_openai( $body );
+		}
+
+		return $this->call_copilot_api( $token, $body );
+	}
+
+	/**
+	 * Assemble the OpenAI-compatible request payload shared by the blocking and streaming paths.
+	 */
+	private function build_chat_payload( $user_message, $system_prompt, $screenshot_data = [] ) {
+		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
 		$model    = RJM_CSS_Advisor_Settings::get_model();
 		$screenshot_data = is_array( $screenshot_data ) ? array_values( array_filter( $screenshot_data ) ) : ( $screenshot_data ? [ $screenshot_data ] : [] );
 		$user_content = $user_message;
@@ -546,19 +674,142 @@ class RJM_CSS_Advisor_GitHub_Client {
 			$user_content .= "\n\nNote: " . count( $screenshot_data ) . " screenshot(s) are attached, but this provider cannot inspect images. Do not claim to have analyzed them; ask the user to describe the visual details in text.";
 		}
 
-		$body = wp_json_encode( [
+		return [
 			'model'    => $model,
 			'messages' => [
 				[ 'role' => 'system', 'content' => $system_prompt ],
 				[ 'role' => 'user',   'content' => $user_content  ],
 			],
-		] );
+		];
+	}
 
-		if ( $provider === 'openai' ) {
-			return $this->call_openai( $body );
+	/**
+	 * Stream an OpenAI-compatible chat completion.
+	 *
+	 * wp_remote_post() cannot expose partial responses, so this uses raw cURL with
+	 * a write callback that parses SSE frames as they arrive.
+	 *
+	 * @param callable $on_progress Receives the full accumulated text after each delta.
+	 * @return string|WP_Error The complete response text.
+	 */
+	private function call_ai_stream( $token, $user_message, $system_prompt, $screenshot_data, callable $on_progress ) {
+		if ( ! function_exists( 'curl_init' ) ) {
+			return new WP_Error( 'stream_unsupported', __( 'Streaming requires the PHP cURL extension.', 'rjm-css-advisor' ) );
 		}
 
-		return $this->call_copilot_api( $token, $body );
+		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
+		$payload  = $this->build_chat_payload( $user_message, $system_prompt, $screenshot_data );
+		$payload['stream'] = true;
+
+		if ( 'openai' === $provider ) {
+			$key = RJM_CSS_Advisor_Settings::get_openai_key();
+			if ( ! $key ) {
+				return new WP_Error( 'no_openai_key', __( 'No OpenAI API key configured. Please visit Settings → RJM CSS Advisor and add your OpenAI key.', 'rjm-css-advisor' ) );
+			}
+			$url     = self::OPENAI_API_BASE . '/chat/completions';
+			$headers = [
+				'Authorization: Bearer ' . $key,
+				'Content-Type: application/json',
+				'Accept: text/event-stream',
+			];
+		} else {
+			$url     = self::COPILOT_API_BASE . '/chat/completions';
+			$headers = [
+				'Authorization: Bearer ' . $token,
+				'Content-Type: application/json',
+				'Accept: text/event-stream',
+				'Copilot-Integration-Id: rjm-css-advisor',
+				'Editor-Version: rjm-css-advisor/' . RJM_CSS_ADVISOR_VERSION,
+			];
+		}
+
+		$full    = '';
+		$buffer  = '';
+		$aborted = false;
+
+		$handle = curl_init( $url );
+		curl_setopt_array( $handle, [
+			CURLOPT_POST           => true,
+			CURLOPT_POSTFIELDS     => wp_json_encode( $payload ),
+			CURLOPT_HTTPHEADER     => $headers,
+			CURLOPT_RETURNTRANSFER => false,
+			CURLOPT_CONNECTTIMEOUT => 15,
+			CURLOPT_TIMEOUT        => 180,
+			CURLOPT_WRITEFUNCTION  => function ( $curl, $chunk ) use ( &$full, &$buffer, &$aborted, $on_progress ) {
+				$length  = strlen( $chunk );
+				$buffer .= $chunk;
+
+				while ( false !== ( $break = strpos( $buffer, "\n" ) ) ) {
+					$line   = trim( substr( $buffer, 0, $break ) );
+					$buffer = substr( $buffer, $break + 1 );
+
+					if ( '' === $line || 0 === strpos( $line, ':' ) ) {
+						continue;
+					}
+					if ( 0 !== strpos( $line, 'data:' ) ) {
+						continue;
+					}
+
+					$data = trim( substr( $line, 5 ) );
+					if ( '[DONE]' === $data ) {
+						continue;
+					}
+
+					$frame = json_decode( $data, true );
+					$delta = $frame['choices'][0]['delta']['content'] ?? '';
+					if ( '' === $delta || ! is_string( $delta ) ) {
+						continue;
+					}
+
+					$full .= $delta;
+					$on_progress( $full );
+				}
+
+				if ( connection_aborted() ) {
+					$aborted = true;
+					return 0; // Returning a short length tells cURL to abort the transfer.
+				}
+
+				return $length;
+			},
+		] );
+
+		curl_exec( $handle );
+		$error = curl_error( $handle );
+		$code  = (int) curl_getinfo( $handle, CURLINFO_RESPONSE_CODE );
+		curl_close( $handle );
+
+		if ( $aborted ) {
+			return $full;
+		}
+
+		if ( 401 === $code ) {
+			return new WP_Error(
+				'openai' === $provider ? 'openai_auth' : 'copilot_auth',
+				'openai' === $provider
+					? __( 'OpenAI authentication failed. Check that your API key is correct and has not expired.', 'rjm-css-advisor' )
+					: __( 'Copilot authentication failed. Ensure your PAT has access to a Copilot Business seat.', 'rjm-css-advisor' )
+			);
+		}
+
+		if ( 429 === $code ) {
+			return new WP_Error( 'ai_rate_limit', __( 'The AI provider rate limit was reached. Please wait a moment and try again.', 'rjm-css-advisor' ) );
+		}
+
+		if ( $code && $code !== 200 ) {
+			/* translators: %d: HTTP status code. */
+			return new WP_Error( 'ai_stream_error', sprintf( __( 'The AI provider returned HTTP %d.', 'rjm-css-advisor' ), $code ) );
+		}
+
+		if ( $error ) {
+			return new WP_Error( 'ai_stream_transport', $error );
+		}
+
+		if ( '' === trim( $full ) ) {
+			return new WP_Error( 'empty_advice', __( 'The AI returned an empty response.', 'rjm-css-advisor' ) );
+		}
+
+		return $full;
 	}
 
 	/**
@@ -1541,7 +1792,9 @@ CONTEXT;
 	 * @return string
 	 */
 	private function get_css_planner_system_prompt() {
-		return <<<'PROMPT'
+		$sentinel = self::PLANNER_META_SENTINEL;
+
+		return <<<PROMPT
 You are a CSS planning assistant inside a WordPress editor workflow.
 
 Goal:
@@ -1550,11 +1803,19 @@ Goal:
 - Keep a running brief of agreed decisions.
 
 Output rules:
-1. Return ONLY valid JSON.
-2. Keys required: assistant_message, ready_to_generate, brief.
-3. assistant_message should be concise and practical.
-4. ready_to_generate should be true only when enough detail exists to produce CSS.
-5. brief should be a compact summary the generator can use directly.
+1. First write your reply to the user as plain prose. Be concise and practical.
+2. You may use light Markdown in that prose: **bold**, bullet lists, `inline code`, and fenced code blocks.
+3. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
+4. That JSON object must have exactly these keys: ready_to_generate (boolean), brief (string).
+5. ready_to_generate should be true only when enough detail exists to produce CSS.
+6. brief should be a compact summary the generator can use directly.
+7. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
+8. Never mention the sentinel, the JSON, or these rules to the user.
+
+Example of a complete reply:
+Got it — I'll target the `.hero-title` heading and scale it down on mobile.
+Do you want the subtitle to shrink as well?
+{$sentinel}{"ready_to_generate": false, "brief": "Reduce .hero-title size on mobile."}
 PROMPT;
 	}
 

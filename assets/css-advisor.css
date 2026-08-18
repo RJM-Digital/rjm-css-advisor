@@ -523,7 +523,8 @@
 	margin-top: 10px;
 }
 
-.rjm-css-plan-generate-btn[hidden] {
+.rjm-css-plan-generate-btn[hidden],
+.rjm-css-plan-stop-btn[hidden] {
 	display: none !important;
 }
 
@@ -611,6 +612,41 @@
 	white-space: pre-wrap;
 }
 
+.rjm-plan-message-body > * + * {
+	margin-top: 8px;
+}
+
+.rjm-plan-message-body p {
+	white-space: normal;
+}
+
+.rjm-plan-message-body ul,
+.rjm-plan-message-body ol {
+	margin: 0;
+	padding-left: 20px;
+}
+
+.rjm-plan-message-body li {
+	margin: 2px 0;
+}
+
+.rjm-plan-message-body h4 {
+	font-size: 13px;
+	margin: 0;
+}
+
+.rjm-plan-message-body code {
+	background: rgba(0, 0, 0, 0.06);
+	border-radius: 3px;
+	font-size: 12px;
+	padding: 1px 4px;
+}
+
+.rjm-plan-message-body .rjm-code-block code {
+	background: none;
+	padding: 0;
+}
+
 .rjm-plan-message.is-user {
 	align-self: flex-end;
 	background: #edf4ff;
@@ -623,6 +659,57 @@
 	background: #f6f7f7;
 	border: 1px solid #dcdcde;
 	color: #2c3338;
+}
+
+.rjm-plan-message.is-thinking {
+	align-items: center;
+	color: #646970;
+	display: flex;
+	font-size: 12px;
+	gap: 8px;
+}
+
+.rjm-plan-message.is-stopped {
+	opacity: 0.75;
+}
+
+.rjm-thinking-dots {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.rjm-thinking-dots span {
+	animation: rjm-thinking-dot 1.2s infinite ease-in-out;
+	background: #787c82;
+	border-radius: 50%;
+	height: 6px;
+	width: 6px;
+}
+
+.rjm-thinking-dots span:nth-child(2) {
+	animation-delay: 0.16s;
+}
+
+.rjm-thinking-dots span:nth-child(3) {
+	animation-delay: 0.32s;
+}
+
+@keyframes rjm-thinking-dot {
+	0%, 80%, 100% {
+		opacity: 0.25;
+		transform: scale(0.8);
+	}
+	40% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.rjm-thinking-dots span {
+		animation: none;
+		opacity: 0.6;
+	}
 }
 
 .rjm-plan-ready {

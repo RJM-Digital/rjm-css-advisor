@@ -96,6 +96,9 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'insertBtn'       => __( '↑ Insert into field', 'rjm-css-advisor' ),
 					'expandGoalBtn'   => __( 'Expand', 'rjm-css-advisor' ),
 					'reduceGoalBtn'   => __( 'Reduce', 'rjm-css-advisor' ),
+					'screenshotTooLarge' => __( 'Screenshot is too large. Please choose an image under 4 MB.', 'rjm-css-advisor' ),
+					'screenshotInvalid'  => __( 'Please choose a PNG, JPEG, or WebP image.', 'rjm-css-advisor' ),
+					'screenshotRemove'   => __( 'Remove screenshot', 'rjm-css-advisor' ),
 				],
 			]
 		);
@@ -185,6 +188,15 @@ class RJM_CSS_Advisor_ACF_Integration {
 								rows="3"
 								placeholder="<?php esc_attr_e( 'e.g. Make the heading navy blue with font size 2rem, add extra padding below the section on mobile…', 'rjm-css-advisor' ); ?>"
 							></textarea>
+							<div class="rjm-css-screenshot-controls" hidden>
+								<input type="file" class="rjm-css-screenshot-input" accept="image/png,image/jpeg,image/webp" hidden />
+								<button type="button" class="button rjm-css-screenshot-upload-btn">
+									<?php esc_html_e( 'Attach screenshot', 'rjm-css-advisor' ); ?>
+								</button>
+								<span class="rjm-css-screenshot-help"><?php esc_html_e( 'Paste an image here or choose a file.', 'rjm-css-advisor' ); ?></span>
+								<div class="rjm-css-screenshot-preview" hidden></div>
+								<p class="rjm-css-screenshot-error rjm-error" role="alert" hidden></p>
+							</div>
 							<fieldset class="rjm-css-breakpoints" aria-label="<?php esc_attr_e( 'Responsive breakpoints', 'rjm-css-advisor' ); ?>">
 								<legend class="rjm-css-breakpoints-legend"><?php esc_html_e( 'Apply to breakpoints', 'rjm-css-advisor' ); ?></legend>
 								<div class="rjm-css-breakpoints-list">

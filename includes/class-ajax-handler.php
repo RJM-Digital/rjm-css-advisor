@@ -22,6 +22,9 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 	const SESSION_TTL = HOUR_IN_SECONDS;
 	const GLOBAL_CSS_FIELD_KEY = 'field_6964fb66b09f1';
+	const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+	const MAX_SCREENSHOT_WIDTH = 4096;
+	const MAX_SCREENSHOT_HEIGHT = 4096;
 
 	public static function init() {
 		add_action( 'wp_ajax_rjm_get_css_advice', [ __CLASS__, 'handle' ] );
@@ -127,6 +130,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$is_global   = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global   = self::normalize_is_global_request( $field, $field_key, $is_global );
 		$message     = sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) );
+		$screenshot  = self::validate_screenshot_payload( wp_unslash( $_POST['screenshot_data'] ?? '' ), wp_unslash( $_POST['screenshot_name'] ?? '' ) );
 		$session_id  = sanitize_text_field( wp_unslash( $_POST['session_id'] ?? '' ) );
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
 		$post_id     = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
@@ -142,6 +146,10 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		if ( ! $message ) {
 			wp_send_json_error( [ 'message' => __( 'Please enter a message for Ask/Plan mode.', 'rjm-css-advisor' ) ] );
+		}
+
+		if ( is_wp_error( $screenshot ) ) {
+			wp_send_json_error( [ 'message' => $screenshot->get_error_message() ] );
 		}
 
 		$scope = self::build_memory_scope( $post_id, $field, $field_key, $layout, $is_global );
@@ -169,10 +177,14 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$session['existing_css_context'] = $existing_css_context;
 		}
 
-		$session['messages'][] = [
+		$user_message = [
 			'role'    => 'user',
 			'content' => $message,
 		];
+		if ( $screenshot ) {
+			$user_message['screenshot'] = $screenshot;
+		}
+		$session['messages'][] = $user_message;
 
 		$client = new RJM_CSS_Advisor_GitHub_Client();
 		$result = $client->plan_css_turn(
@@ -207,7 +219,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		}
 
 		$memory['current_css']    = (string) ( $session['existing_css_context'] ?? '' );
-		$memory['chat_messages']  = array_slice( (array) $session['messages'], -12 );
+		$memory['chat_messages']  = self::strip_screenshots_from_messages( array_slice( (array) $session['messages'], -12 ) );
 		$memory['last_brief']     = (string) ( $session['brief'] ?? '' );
 		$memory['updated_at']     = time();
 		self::set_field_memory( $scope, $memory );
@@ -285,13 +297,15 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		}
 
 		$client = new RJM_CSS_Advisor_GitHub_Client();
+		$screenshot_data = self::get_latest_screenshot_data( $session['messages'] );
 		$result = $client->generate_css(
 			$session['layout'],
 			$session['field'],
 			! empty( $session['is_global'] ),
 			$goal,
 			$session['breakpoints'],
-			$existing_css_context
+			$existing_css_context,
+			$screenshot_data
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -840,13 +854,19 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		foreach ( (array) $messages as $message ) {
 			$role    = sanitize_key( $message['role'] ?? 'assistant' );
 			$content = trim( (string) ( $message['content'] ?? '' ) );
-			if ( ! $content ) {
+			$screenshot = is_array( $message['screenshot'] ?? null ) ? $message['screenshot'] : [];
+			if ( ! $content && empty( $screenshot['data'] ) ) {
 				continue;
 			}
 
 			$class = $role === 'user' ? 'is-user' : 'is-assistant';
 			echo '<div class="rjm-plan-message ' . esc_attr( $class ) . '">';
-			echo '<p>' . esc_html( $content ) . '</p>';
+			if ( $content ) {
+				echo '<p>' . esc_html( $content ) . '</p>';
+			}
+			if ( ! empty( $screenshot['data'] ) ) {
+				echo '<div class="rjm-plan-screenshot"><img src="' . esc_attr( $screenshot['data'] ) . '" alt="' . esc_attr__( 'Attached screenshot', 'rjm-css-advisor' ) . '" /></div>';
+			}
 			echo '</div>';
 		}
 		echo '</div>';
@@ -1022,6 +1042,80 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$css = (string) $css;
 		$css = str_replace( [ "\r\n", "\r" ], "\n", $css );
 		return trim( $css );
+	}
+
+	/**
+	 * Validate and normalize one temporary screenshot attachment.
+	 *
+	 * @param string $data Data URL containing the image.
+	 * @param string $name Original filename.
+	 * @return array|WP_Error|null
+	 */
+	private static function validate_screenshot_payload( $data, $name ) {
+		$data = trim( (string) $data );
+		if ( ! $data ) {
+			return null;
+		}
+
+		if ( ! preg_match( '#^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$#', $data, $matches ) ) {
+			return new WP_Error( 'invalid_screenshot', __( 'Please attach a valid PNG, JPEG, or WebP screenshot.', 'rjm-css-advisor' ) );
+		}
+
+		$binary = base64_decode( $matches[2], true );
+		if ( false === $binary || strlen( $binary ) > self::MAX_SCREENSHOT_BYTES ) {
+			return new WP_Error( 'screenshot_too_large', __( 'Screenshot is too large. Please choose an image under 4 MB.', 'rjm-css-advisor' ) );
+		}
+
+		$image_info = @getimagesizefromstring( $binary );
+		$mime = is_array( $image_info ) ? (string) ( $image_info['mime'] ?? '' ) : '';
+		$width = is_array( $image_info ) ? (int) ( $image_info[0] ?? 0 ) : 0;
+		$height = is_array( $image_info ) ? (int) ( $image_info[1] ?? 0 ) : 0;
+		if ( ! in_array( $mime, [ 'image/png', 'image/jpeg', 'image/webp' ], true ) ) {
+			return new WP_Error( 'invalid_screenshot', __( 'Please attach a valid PNG, JPEG, or WebP screenshot.', 'rjm-css-advisor' ) );
+		}
+		if ( $width < 1 || $height < 1 || $width > self::MAX_SCREENSHOT_WIDTH || $height > self::MAX_SCREENSHOT_HEIGHT ) {
+			return new WP_Error( 'screenshot_dimensions', __( 'Screenshot dimensions must be no larger than 4096 by 4096 pixels.', 'rjm-css-advisor' ) );
+		}
+
+		return [
+			'data' => 'data:' . $mime . ';base64,' . base64_encode( $binary ),
+			'name' => sanitize_file_name( (string) $name ) ?: 'screenshot',
+			'mime' => $mime,
+		];
+	}
+
+	/**
+	 * Keep screenshots transient-only; user-meta chat memory remains text-only.
+	 *
+	 * @param array $messages
+	 * @return array
+	 */
+	private static function strip_screenshots_from_messages( $messages ) {
+		return array_map(
+			static function ( $message ) {
+				$message = is_array( $message ) ? $message : [];
+				unset( $message['screenshot'] );
+				return $message;
+			},
+			(array) $messages
+		);
+	}
+
+	/**
+	 * Return the most recent screenshot retained by an active plan session.
+	 *
+	 * @param array $messages
+	 * @return string
+	 */
+	private static function get_latest_screenshot_data( $messages ) {
+		foreach ( array_reverse( (array) $messages ) as $message ) {
+			$data = (string) ( $message['screenshot']['data'] ?? '' );
+			if ( $data ) {
+				return $data;
+			}
+		}
+
+		return '';
 	}
 
 	/**

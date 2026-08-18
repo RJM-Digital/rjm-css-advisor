@@ -419,6 +419,56 @@
 	width: 100%;
 }
 
+.rjm-css-screenshot-controls {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.rjm-css-screenshot-controls[hidden],
+.rjm-css-screenshot-preview[hidden],
+.rjm-css-screenshot-error[hidden] {
+	display: none !important;
+}
+
+.rjm-css-screenshot-help {
+	color: #646970;
+	font-size: 12px;
+}
+
+.rjm-css-screenshot-preview {
+	align-items: center;
+	display: flex;
+	flex-basis: 100%;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.rjm-css-screenshot-preview img {
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+	display: block;
+	height: 56px;
+	object-fit: cover;
+	width: 80px;
+}
+
+.rjm-css-screenshot-preview span {
+	color: #2c3338;
+	font-size: 12px;
+	max-width: 260px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.rjm-css-screenshot-error {
+	flex-basis: 100%;
+	margin: 0;
+}
+
 .rjm-css-breakpoints {
 	border: 0;
 	margin: 12px 0 0;
@@ -465,6 +515,21 @@
 
 .rjm-css-plan-generate-btn[hidden] {
 	display: none !important;
+}
+
+.rjm-plan-screenshot {
+	margin-top: 8px;
+}
+
+.rjm-plan-screenshot img {
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+	display: block;
+	height: auto;
+	max-height: 240px;
+	max-width: 100%;
+	object-fit: contain;
+	width: auto;
 }
 
 .rjm-css-advisor-actions .rjm-css-plan-generate-btn {

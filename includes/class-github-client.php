@@ -80,7 +80,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param array  $breakpoints   Selected breakpoint slugs from the advisor form.
 	 * @return array|WP_Error  { css: string }
 	 */
-	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '' ) {
+	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $screenshot_data = '' ) {
 		$selected_breakpoints = is_array( $breakpoints ) ? $breakpoints : [];
 		$existing_css_block   = $this->build_existing_css_context_block( $existing_css_context );
 		$is_global            = $is_global || ( 'global_custom_css' === $field_name );
@@ -105,7 +105,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$user_message .= $existing_css_block;
 		$system_prompt = $this->get_css_generator_system_prompt( $is_global );
 
-		$css = $this->call_copilot_with_context( $token, 'CSS Generator', $user_message, $system_prompt );
+		$css = $this->call_copilot_with_context( $token, 'CSS Generator', $user_message, $system_prompt, $screenshot_data );
 
 		if ( is_wp_error( $css ) ) {
 			$this->log_debug_error( 'generate_css', $css, [
@@ -152,6 +152,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$conversation = $this->format_chat_messages_for_prompt( $messages );
+		$screenshot_data = $this->get_latest_screenshot_data( $messages );
 		$prompt = "Selected breakpoints: " . implode( ', ', $this->normalize_selected_breakpoints( $breakpoints ) ) . "\n\n";
 		$prompt .= "Context:\n" . $context['context'] . "\n\n";
 		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
@@ -162,7 +163,8 @@ class RJM_CSS_Advisor_GitHub_Client {
 			$token,
 			'CSS Planner',
 			$prompt,
-			$this->get_css_planner_system_prompt()
+			$this->get_css_planner_system_prompt(),
+			$screenshot_data
 		);
 
 		if ( is_wp_error( $raw ) ) {
@@ -528,15 +530,24 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * Make the actual AI chat/completions API request.
 	 * Routes to OpenAI or GitHub Copilot depending on the saved ai_provider setting.
 	 */
-	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt ) {
+	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = '' ) {
 		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
 		$model    = RJM_CSS_Advisor_Settings::get_model();
+		$user_content = $user_message;
+		if ( $screenshot_data && 'openai' === $provider ) {
+			$user_content = [
+				[ 'type' => 'text', 'text' => $user_message ],
+				[ 'type' => 'image_url', 'image_url' => [ 'url' => $screenshot_data, 'detail' => 'auto' ] ],
+			];
+		} elseif ( $screenshot_data ) {
+			$user_content .= "\n\nNote: A screenshot is attached, but this provider cannot inspect images. Do not claim to have analyzed it; ask the user to describe the visual details in text.";
+		}
 
 		$body = wp_json_encode( [
 			'model'    => $model,
 			'messages' => [
 				[ 'role' => 'system', 'content' => $system_prompt ],
-				[ 'role' => 'user',   'content' => $user_message  ],
+				[ 'role' => 'user',   'content' => $user_content  ],
 			],
 		] );
 
@@ -1386,10 +1397,28 @@ CONTEXT;
 			if ( ! $content ) {
 				continue;
 			}
-			$lines[] = strtoupper( $role ) . ': ' . $content;
+			$attachment_note = ! empty( $message['screenshot']['data'] ) ? ' [Screenshot attached]' : '';
+			$lines[] = strtoupper( $role ) . $attachment_note . ': ' . $content;
 		}
 
 		return $lines ? implode( "\n", $lines ) : 'USER: (no conversation yet)';
+	}
+
+	/**
+	 * Return the most recent validated screenshot from a plan conversation.
+	 *
+	 * @param array $messages
+	 * @return string
+	 */
+	private function get_latest_screenshot_data( $messages ) {
+		foreach ( array_reverse( (array) $messages ) as $message ) {
+			$data = (string) ( $message['screenshot']['data'] ?? '' );
+			if ( $data ) {
+				return $data;
+			}
+		}
+
+		return '';
 	}
 
 	/**

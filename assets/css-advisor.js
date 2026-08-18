@@ -31,6 +31,10 @@
 		$(document).on('click',   '.rjm-insert-btn',           onInsertClick);
 		// Ctrl/Cmd + Enter inside the goal textarea submits the form.
 		$(document).on('keydown', '.rjm-css-goal-input',       onGoalKeydown);
+		$(document).on('paste',   '.rjm-css-goal-input',       onGoalPaste);
+		$(document).on('click',   '.rjm-css-screenshot-upload-btn', onScreenshotUploadClick);
+		$(document).on('change',  '.rjm-css-screenshot-input', onScreenshotInputChange);
+		$(document).on('click',   '.rjm-css-screenshot-remove', onScreenshotRemoveClick);
 	});
 
 	// -------------------------------------------------------------------------
@@ -116,6 +120,94 @@
 		}
 	}
 
+	function onGoalPaste(e) {
+		var clipboard = e.originalEvent && e.originalEvent.clipboardData;
+		if (!clipboard || !clipboard.items) {
+			return;
+		}
+
+		for (var i = 0; i < clipboard.items.length; i++) {
+			var item = clipboard.items[i];
+			if (item.kind === 'file' && item.type.indexOf('image/') === 0) {
+				e.preventDefault();
+				setPendingScreenshot($(this).closest('.rjm-css-advisor-panel'), item.getAsFile());
+				return;
+			}
+		}
+	}
+
+	function onScreenshotUploadClick(e) {
+		e.preventDefault();
+		$(this).siblings('.rjm-css-screenshot-input').trigger('click');
+	}
+
+	function onScreenshotInputChange() {
+		var $input = $(this);
+		setPendingScreenshot($input.closest('.rjm-css-advisor-panel'), this.files && this.files[0]);
+		$input.val('');
+	}
+
+	function onScreenshotRemoveClick(e) {
+		e.preventDefault();
+		clearPendingScreenshot($(this).closest('.rjm-css-advisor-panel'));
+	}
+
+	function setPendingScreenshot($panel, file) {
+		if (!file) {
+			return;
+		}
+		var maxBytes = 4 * 1024 * 1024;
+		var allowed = [ 'image/png', 'image/jpeg', 'image/webp' ];
+		if (allowed.indexOf(file.type) === -1) {
+			showScreenshotError($panel, cfg.i18n.screenshotInvalid || 'Please choose a PNG, JPEG, or WebP image.');
+			return;
+		}
+		if (file.size > maxBytes) {
+			showScreenshotError($panel, cfg.i18n.screenshotTooLarge || 'Screenshot is too large.');
+			return;
+		}
+
+		var reader = new FileReader();
+		reader.onload = function () {
+			$panel.data('pendingScreenshot', {
+				data: String(reader.result || ''),
+				name: file.name || 'screenshot',
+				size: file.size,
+				type: file.type,
+			});
+			renderScreenshotPreview($panel);
+		};
+		reader.onerror = function () {
+			showScreenshotError($panel, cfg.i18n.screenshotInvalid || 'Unable to read that image.');
+		};
+		reader.readAsDataURL(file);
+	}
+
+	function renderScreenshotPreview($panel) {
+		var screenshot = $panel.data('pendingScreenshot');
+		var $preview = $panel.find('.rjm-css-screenshot-preview');
+		$panel.find('.rjm-css-screenshot-error').attr('hidden', true).text('');
+		if (!screenshot) {
+			$preview.attr('hidden', true).empty();
+			return;
+		}
+		$preview.html('<img src="' + escHtml(screenshot.data) + '" alt="" />' +
+			'<span>' + escHtml(screenshot.name) + '</span>' +
+			'<button type="button" class="button-link rjm-css-screenshot-remove">' +
+			escHtml(cfg.i18n.screenshotRemove || 'Remove screenshot') + '</button>').removeAttr('hidden');
+	}
+
+	function showScreenshotError($panel, message) {
+		$panel.removeData('pendingScreenshot');
+		renderScreenshotPreview($panel);
+		$panel.find('.rjm-css-screenshot-error').text(message).removeAttr('hidden');
+	}
+
+	function clearPendingScreenshot($panel) {
+		$panel.removeData('pendingScreenshot');
+		renderScreenshotPreview($panel);
+	}
+
 	function generateCSS($wrap, $panel, goal, breakpoints) {
 		var reqCtx = collectRequestContext($wrap);
 
@@ -176,6 +268,7 @@
 	function sendPlanMessage($wrap, $panel, message, breakpoints) {
 		var reqCtx = collectRequestContext($wrap);
 		var sessionId = $panel.data('planSessionId') || '';
+		var screenshot = $panel.data('pendingScreenshot') || {};
 		var ajaxUrl = normalizeAjaxUrl();
 
 		setLoadingState($panel, cfg.i18n.planning || cfg.i18n.generating);
@@ -193,6 +286,9 @@
 				current_css: reqCtx.currentCss,
 				is_global: reqCtx.isGlobal ? '1' : '0',
 				message: message,
+				screenshot_data: screenshot.data || '',
+				screenshot_name: screenshot.name || '',
+				screenshot_type: screenshot.type || '',
 				session_id: sessionId,
 				breakpoints: breakpoints,
 			},
@@ -207,6 +303,7 @@
 				$panel.data('planSessionId', data.session_id || '');
 				$panel.data('planReady', Boolean(data.ready_to_generate));
 				renderPlanTranscript($panel, data.transcript_html || '', data.ready_to_generate);
+				clearPendingScreenshot($panel);
 				updateModeUI($panel);
 				$panel.find('.rjm-css-goal-input').val('').focus();
 			},
@@ -448,6 +545,7 @@
 		var isPlanReady = Boolean($panel.data('planReady'));
 
 		if (mode === 'ask') {
+			$panel.find('.rjm-css-screenshot-controls').removeAttr('hidden');
 			$button.text(cfg.i18n.sendPlanBtn || 'Send message');
 			if (isPlanReady) {
 				$panel.find('.rjm-css-plan-generate-btn').removeAttr('hidden');
@@ -459,6 +557,7 @@
 		}
 
 		if (mode === 'build') {
+			$panel.find('.rjm-css-screenshot-controls').attr('hidden', true);
 			$button.text(cfg.i18n.startBuildBtn || 'Start build');
 			$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 			$panel.find('.rjm-css-breakpoints').removeAttr('hidden');
@@ -466,6 +565,7 @@
 		}
 
 		$button.text(cfg.i18n.generateBtn || 'Generate CSS ✨');
+		$panel.find('.rjm-css-screenshot-controls').attr('hidden', true);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-breakpoints').removeAttr('hidden');
 	}

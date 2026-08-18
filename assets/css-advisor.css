@@ -439,14 +439,19 @@
 }
 
 .rjm-css-screenshot-preview {
-	align-items: center;
-	display: flex;
+	display: grid;
 	flex-basis: 100%;
-	gap: 8px;
+	gap: 6px;
 	margin-top: 4px;
 }
 
-.rjm-css-screenshot-preview img {
+.rjm-css-screenshot-item {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
+.rjm-css-screenshot-item img {
 	border: 1px solid #dcdcde;
 	border-radius: 3px;
 	display: block;
@@ -455,13 +460,18 @@
 	width: 80px;
 }
 
-.rjm-css-screenshot-preview span {
+.rjm-css-screenshot-item span {
 	color: #2c3338;
 	font-size: 12px;
 	max-width: 260px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.rjm-css-screenshot-count {
+	color: #646970;
+	font-size: 12px;
 }
 
 .rjm-css-screenshot-error {
@@ -527,7 +537,7 @@
 	display: block;
 	height: auto;
 	max-height: 240px;
-	max-width: 100%;
+	max-width: min(100%, 320px);
 	object-fit: contain;
 	width: auto;
 }

@@ -99,6 +99,8 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'screenshotTooLarge' => __( 'Screenshot is too large. Please choose an image under 4 MB.', 'rjm-css-advisor' ),
 					'screenshotInvalid'  => __( 'Please choose a PNG, JPEG, or WebP image.', 'rjm-css-advisor' ),
 					'screenshotRemove'   => __( 'Remove screenshot', 'rjm-css-advisor' ),
+					'screenshotCount'   => __( '%1$d screenshots, %2$s total', 'rjm-css-advisor' ),
+					'screenshotLimit'   => __( 'You can attach up to 5 screenshots per message and 20 MB total.', 'rjm-css-advisor' ),
 				],
 			]
 		);
@@ -189,12 +191,15 @@ class RJM_CSS_Advisor_ACF_Integration {
 								placeholder="<?php esc_attr_e( 'e.g. Make the heading navy blue with font size 2rem, add extra padding below the section on mobile…', 'rjm-css-advisor' ); ?>"
 							></textarea>
 							<div class="rjm-css-screenshot-controls" hidden>
-								<input type="file" class="rjm-css-screenshot-input" accept="image/png,image/jpeg,image/webp" hidden />
+								<input type="file" class="rjm-css-screenshot-input" accept="image/png,image/jpeg,image/webp" multiple hidden />
 								<button type="button" class="button rjm-css-screenshot-upload-btn">
 									<?php esc_html_e( 'Attach screenshot', 'rjm-css-advisor' ); ?>
 								</button>
 								<span class="rjm-css-screenshot-help"><?php esc_html_e( 'Paste an image here or choose a file.', 'rjm-css-advisor' ); ?></span>
 								<div class="rjm-css-screenshot-preview" hidden></div>
+								<button type="button" class="button-link rjm-css-screenshot-clear" hidden>
+									<?php esc_html_e( 'Clear screenshots', 'rjm-css-advisor' ); ?>
+								</button>
 								<p class="rjm-css-screenshot-error rjm-error" role="alert" hidden></p>
 							</div>
 							<fieldset class="rjm-css-breakpoints" aria-label="<?php esc_attr_e( 'Responsive breakpoints', 'rjm-css-advisor' ); ?>">

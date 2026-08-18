@@ -25,6 +25,9 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 	const MAX_SCREENSHOT_WIDTH = 4096;
 	const MAX_SCREENSHOT_HEIGHT = 4096;
+	const MAX_SCREENSHOTS_PER_MESSAGE = 5;
+	const MAX_SCREENSHOT_MESSAGE_BYTES = 20 * 1024 * 1024;
+	const MAX_SCREENSHOT_SESSION_BYTES = 50 * 1024 * 1024;
 
 	public static function init() {
 		add_action( 'wp_ajax_rjm_get_css_advice', [ __CLASS__, 'handle' ] );
@@ -130,7 +133,9 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$is_global   = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global   = self::normalize_is_global_request( $field, $field_key, $is_global );
 		$message     = sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) );
-		$screenshot  = self::validate_screenshot_payload( wp_unslash( $_POST['screenshot_data'] ?? '' ), wp_unslash( $_POST['screenshot_name'] ?? '' ) );
+		$screenshot_data = $_POST['screenshot_data'] ?? [];
+		$screenshot_name = $_POST['screenshot_name'] ?? [];
+		$screenshots = self::validate_screenshot_payloads( $screenshot_data, $screenshot_name );
 		$session_id  = sanitize_text_field( wp_unslash( $_POST['session_id'] ?? '' ) );
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
 		$post_id     = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
@@ -148,8 +153,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			wp_send_json_error( [ 'message' => __( 'Please enter a message for Ask/Plan mode.', 'rjm-css-advisor' ) ] );
 		}
 
-		if ( is_wp_error( $screenshot ) ) {
-			wp_send_json_error( [ 'message' => $screenshot->get_error_message() ] );
+		if ( is_wp_error( $screenshots ) ) {
+			wp_send_json_error( [ 'message' => $screenshots->get_error_message() ] );
 		}
 
 		$scope = self::build_memory_scope( $post_id, $field, $field_key, $layout, $is_global );
@@ -177,12 +182,18 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$session['existing_css_context'] = $existing_css_context;
 		}
 
+		$session_screenshot_bytes = self::get_screenshot_bytes( $session['messages'] );
+		$new_screenshot_bytes = self::get_screenshot_bytes( $screenshots );
+		if ( $session_screenshot_bytes + $new_screenshot_bytes > self::MAX_SCREENSHOT_SESSION_BYTES ) {
+			wp_send_json_error( [ 'message' => __( 'This plan session has reached its 50 MB screenshot limit. Remove some screenshots or start a new plan.', 'rjm-css-advisor' ) ] );
+		}
+
 		$user_message = [
 			'role'    => 'user',
 			'content' => $message,
 		];
-		if ( $screenshot ) {
-			$user_message['screenshot'] = $screenshot;
+		if ( $screenshots ) {
+			$user_message['screenshots'] = $screenshots;
 		}
 		$session['messages'][] = $user_message;
 
@@ -297,7 +308,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		}
 
 		$client = new RJM_CSS_Advisor_GitHub_Client();
-		$screenshot_data = self::get_latest_screenshot_data( $session['messages'] );
+		$screenshot_data = self::get_screenshot_data( $session['messages'] );
 		$result = $client->generate_css(
 			$session['layout'],
 			$session['field'],
@@ -854,8 +865,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		foreach ( (array) $messages as $message ) {
 			$role    = sanitize_key( $message['role'] ?? 'assistant' );
 			$content = trim( (string) ( $message['content'] ?? '' ) );
-			$screenshot = is_array( $message['screenshot'] ?? null ) ? $message['screenshot'] : [];
-			if ( ! $content && empty( $screenshot['data'] ) ) {
+			$screenshots = self::get_message_screenshots( $message );
+			if ( ! $content && ! $screenshots ) {
 				continue;
 			}
 
@@ -864,8 +875,11 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			if ( $content ) {
 				echo '<p>' . esc_html( $content ) . '</p>';
 			}
-			if ( ! empty( $screenshot['data'] ) ) {
-				echo '<div class="rjm-plan-screenshot"><img src="' . esc_attr( $screenshot['data'] ) . '" alt="' . esc_attr__( 'Attached screenshot', 'rjm-css-advisor' ) . '" /></div>';
+			foreach ( $screenshots as $screenshot ) {
+				if ( empty( $screenshot['data'] ) ) {
+					continue;
+				}
+				echo '<div class="rjm-plan-screenshot"><img loading="lazy" src="' . esc_attr( $screenshot['data'] ) . '" alt="' . esc_attr__( 'Attached screenshot', 'rjm-css-advisor' ) . '" /></div>';
 			}
 			echo '</div>';
 		}
@@ -1081,7 +1095,81 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			'data' => 'data:' . $mime . ';base64,' . base64_encode( $binary ),
 			'name' => sanitize_file_name( (string) $name ) ?: 'screenshot',
 			'mime' => $mime,
+			'size' => strlen( $binary ),
 		];
+	}
+
+	/**
+	 * Validate a batch of screenshot data URLs.
+	 *
+	 * @param string|array $data  Screenshot data URL(s).
+	 * @param string|array $names Original filename(s).
+	 * @return array|WP_Error
+	 */
+	private static function validate_screenshot_payloads( $data, $names ) {
+		$data = is_array( $data ) ? array_values( $data ) : ( $data ? [ $data ] : [] );
+		$names = is_array( $names ) ? array_values( $names ) : ( $names ? [ $names ] : [] );
+		if ( count( $data ) > self::MAX_SCREENSHOTS_PER_MESSAGE ) {
+			return new WP_Error( 'screenshot_count', __( 'You can attach up to 5 screenshots per message.', 'rjm-css-advisor' ) );
+		}
+
+		$screenshots = [];
+		$total_bytes = 0;
+		foreach ( $data as $index => $item ) {
+			$screenshot = self::validate_screenshot_payload( wp_unslash( $item ), wp_unslash( $names[ $index ] ?? '' ) );
+			if ( is_wp_error( $screenshot ) ) {
+				return $screenshot;
+			}
+			$total_bytes += (int) ( $screenshot['size'] ?? 0 );
+			if ( $total_bytes > self::MAX_SCREENSHOT_MESSAGE_BYTES ) {
+				return new WP_Error( 'screenshot_message_size', __( 'Screenshots in one message cannot exceed 20 MB total.', 'rjm-css-advisor' ) );
+			}
+			$screenshots[] = $screenshot;
+		}
+
+		return $screenshots;
+	}
+
+	/**
+	 * Normalize current and legacy message attachment shapes.
+	 *
+	 * @param array $message
+	 * @return array
+	 */
+	private static function get_message_screenshots( $message ) {
+		if ( ! empty( $message['screenshots'] ) && is_array( $message['screenshots'] ) ) {
+			return $message['screenshots'];
+		}
+		if ( ! empty( $message['screenshot'] ) && is_array( $message['screenshot'] ) ) {
+			return [ $message['screenshot'] ];
+		}
+		return [];
+	}
+
+	/**
+	 * Sum validated screenshot bytes in messages or attachment records.
+	 *
+	 * @param array $items
+	 * @return int
+	 */
+	private static function get_screenshot_bytes( $items ) {
+		$total = 0;
+		foreach ( (array) $items as $item ) {
+			if ( isset( $item['role'] ) || isset( $item['content'] ) ) {
+				$attachments = self::get_message_screenshots( $item );
+			} else {
+				$attachments = [ $item ];
+			}
+			foreach ( $attachments as $attachment ) {
+				if ( isset( $attachment['size'] ) ) {
+					$total += (int) $attachment['size'];
+				} elseif ( ! empty( $attachment['data'] ) ) {
+					$parts = explode( ',', (string) $attachment['data'], 2 );
+					$total += isset( $parts[1] ) ? (int) strlen( base64_decode( $parts[1], true ) ?: '' ) : 0;
+				}
+			}
+		}
+		return $total;
 	}
 
 	/**
@@ -1094,7 +1182,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		return array_map(
 			static function ( $message ) {
 				$message = is_array( $message ) ? $message : [];
-				unset( $message['screenshot'] );
+				unset( $message['screenshot'], $message['screenshots'] );
 				return $message;
 			},
 			(array) $messages
@@ -1107,15 +1195,16 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 * @param array $messages
 	 * @return string
 	 */
-	private static function get_latest_screenshot_data( $messages ) {
-		foreach ( array_reverse( (array) $messages ) as $message ) {
-			$data = (string) ( $message['screenshot']['data'] ?? '' );
-			if ( $data ) {
-				return $data;
+	private static function get_screenshot_data( $messages ) {
+		$data = [];
+		foreach ( (array) $messages as $message ) {
+			foreach ( self::get_message_screenshots( $message ) as $screenshot ) {
+				if ( ! empty( $screenshot['data'] ) ) {
+					$data[] = (string) $screenshot['data'];
+				}
 			}
 		}
-
-		return '';
+		return $data;
 	}
 
 	/**

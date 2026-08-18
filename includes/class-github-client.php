@@ -152,7 +152,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$conversation = $this->format_chat_messages_for_prompt( $messages );
-		$screenshot_data = $this->get_latest_screenshot_data( $messages );
+		$screenshot_data = $this->get_screenshot_data( $messages );
 		$prompt = "Selected breakpoints: " . implode( ', ', $this->normalize_selected_breakpoints( $breakpoints ) ) . "\n\n";
 		$prompt .= "Context:\n" . $context['context'] . "\n\n";
 		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
@@ -530,17 +530,20 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * Make the actual AI chat/completions API request.
 	 * Routes to OpenAI or GitHub Copilot depending on the saved ai_provider setting.
 	 */
-	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = '' ) {
+	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = [] ) {
 		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
 		$model    = RJM_CSS_Advisor_Settings::get_model();
+		$screenshot_data = is_array( $screenshot_data ) ? array_values( array_filter( $screenshot_data ) ) : ( $screenshot_data ? [ $screenshot_data ] : [] );
 		$user_content = $user_message;
 		if ( $screenshot_data && 'openai' === $provider ) {
 			$user_content = [
 				[ 'type' => 'text', 'text' => $user_message ],
-				[ 'type' => 'image_url', 'image_url' => [ 'url' => $screenshot_data, 'detail' => 'auto' ] ],
 			];
+			foreach ( array_slice( $screenshot_data, 0, 10 ) as $image_data ) {
+				$user_content[] = [ 'type' => 'image_url', 'image_url' => [ 'url' => $image_data, 'detail' => 'auto' ] ];
+			}
 		} elseif ( $screenshot_data ) {
-			$user_content .= "\n\nNote: A screenshot is attached, but this provider cannot inspect images. Do not claim to have analyzed it; ask the user to describe the visual details in text.";
+			$user_content .= "\n\nNote: " . count( $screenshot_data ) . " screenshot(s) are attached, but this provider cannot inspect images. Do not claim to have analyzed them; ask the user to describe the visual details in text.";
 		}
 
 		$body = wp_json_encode( [
@@ -1397,7 +1400,10 @@ CONTEXT;
 			if ( ! $content ) {
 				continue;
 			}
-			$attachment_note = ! empty( $message['screenshot']['data'] ) ? ' [Screenshot attached]' : '';
+			$attachment_count = ! empty( $message['screenshots'] ) && is_array( $message['screenshots'] )
+				? count( $message['screenshots'] )
+				: ( ! empty( $message['screenshot']['data'] ) ? 1 : 0 );
+			$attachment_note = $attachment_count ? ' [' . $attachment_count . ' screenshot' . ( $attachment_count === 1 ? '' : 's' ) . ' attached]' : '';
 			$lines[] = strtoupper( $role ) . $attachment_note . ': ' . $content;
 		}
 
@@ -1410,15 +1416,19 @@ CONTEXT;
 	 * @param array $messages
 	 * @return string
 	 */
-	private function get_latest_screenshot_data( $messages ) {
-		foreach ( array_reverse( (array) $messages ) as $message ) {
-			$data = (string) ( $message['screenshot']['data'] ?? '' );
-			if ( $data ) {
-				return $data;
+	private function get_screenshot_data( $messages ) {
+		$data = [];
+		foreach ( (array) $messages as $message ) {
+			$screenshots = ! empty( $message['screenshots'] ) && is_array( $message['screenshots'] )
+				? $message['screenshots']
+				: ( ! empty( $message['screenshot'] ) && is_array( $message['screenshot'] ) ? [ $message['screenshot'] ] : [] );
+			foreach ( $screenshots as $screenshot ) {
+				if ( ! empty( $screenshot['data'] ) ) {
+					$data[] = (string) $screenshot['data'];
+				}
 			}
 		}
-
-		return '';
+		return $data;
 	}
 
 	/**

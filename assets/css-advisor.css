@@ -614,8 +614,8 @@ body.rjm-css-advisor-locked {
 	justify-content: center;
 }
 
+/* No display here — it would out-specify the .rjm-css-mode-icon hide rule below. */
 .rjm-css-menu-icon svg {
-	display: block;
 	height: 18px;
 	width: 18px;
 }

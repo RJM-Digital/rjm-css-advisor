@@ -589,9 +589,9 @@ body.rjm-css-advisor-locked {
 	cursor: pointer;
 	display: inline-flex;
 	font-size: 12px;
-	gap: 4px;
+	gap: 6px;
 	line-height: 1;
-	padding: 7px 10px;
+	padding: 6px 10px;
 	white-space: nowrap;
 }
 
@@ -607,9 +607,33 @@ body.rjm-css-advisor-locked {
 	outline-offset: 1px;
 }
 
+.rjm-css-menu-icon {
+	align-items: center;
+	display: inline-flex;
+	flex: 0 0 auto;
+	justify-content: center;
+}
+
+.rjm-css-menu-icon svg {
+	display: block;
+	height: 18px;
+	width: 18px;
+}
+
+.rjm-css-mode-icon {
+	display: none;
+}
+
+.rjm-css-mode-menu[data-mode='generate'] .rjm-css-mode-icon[data-mode='generate'],
+.rjm-css-mode-menu[data-mode='ask'] .rjm-css-mode-icon[data-mode='ask'],
+.rjm-css-mode-menu[data-mode='build'] .rjm-css-mode-icon[data-mode='build'] {
+	display: block;
+}
+
 .rjm-css-menu-caret {
-	font-size: 9px;
-	opacity: 0.7;
+	font-size: 12px;
+	line-height: 1;
+	opacity: 0.75;
 }
 
 /* The panel clips overflow, so the popover opens away from the panel edge:

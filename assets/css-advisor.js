@@ -927,6 +927,7 @@
 
 		// The send button holds an icon, so only its accessible name changes.
 		$button.attr({ title: label, 'aria-label': label });
+		$panel.find('.rjm-css-mode-menu').attr('data-mode', mode);
 		$panel.find('.rjm-css-mode-menu .rjm-css-menu-label').text(getModeLabel(mode));
 		updateBreakpointMenuLabel($panel);
 

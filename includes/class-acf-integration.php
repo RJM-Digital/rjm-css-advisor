@@ -253,26 +253,26 @@ class RJM_CSS_Advisor_ACF_Integration {
 											</button>
 										</span>
 
-										<div class="rjm-css-menu rjm-css-mode-menu" data-mode="generate">
+										<div class="rjm-css-menu rjm-css-mode-menu" data-mode="ask">
 											<button type="button" class="rjm-css-menu-btn" aria-haspopup="true" aria-expanded="false">
 												<span class="rjm-css-menu-icon" aria-hidden="true">
 													<svg class="rjm-css-mode-icon" data-mode="generate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3 12.9 8.1 18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>
 													<svg class="rjm-css-mode-icon" data-mode="ask" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3v4l4.5-4H20a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1z"/><path d="M8 9h8M8 12h5"/></svg>
 													<svg class="rjm-css-mode-icon" data-mode="build" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 6.5 4.3 8 7 5"/><path d="M3 12.5 4.3 14 7 11"/><path d="M3 18.5 4.3 20 7 17"/></svg>
 												</span>
-												<span class="rjm-css-menu-label"><?php esc_html_e( 'Generate', 'rjm-css-advisor' ); ?></span>
+												<span class="rjm-css-menu-label"><?php esc_html_e( 'Ask/Plan', 'rjm-css-advisor' ); ?></span>
 												<span class="rjm-css-menu-caret" aria-hidden="true">▾</span>
 											</button>
 											<div class="rjm-css-menu-popover" role="radiogroup" aria-label="<?php esc_attr_e( 'CSS advisor mode', 'rjm-css-advisor' ); ?>" hidden>
 												<label class="rjm-css-menu-option">
-													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="generate" checked />
+													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="generate" />
 													<span class="rjm-css-menu-option-body">
 														<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Generate', 'rjm-css-advisor' ); ?></span>
 														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_generate_help ); ?></span>
 													</span>
 												</label>
 												<label class="rjm-css-menu-option">
-													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="ask" />
+													<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="ask" checked />
 													<span class="rjm-css-menu-option-body">
 														<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Ask/Plan', 'rjm-css-advisor' ); ?></span>
 														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_ask_help ); ?></span>

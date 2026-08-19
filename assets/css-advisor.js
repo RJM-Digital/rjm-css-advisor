@@ -825,7 +825,7 @@
 	}
 
 	function getSelectedMode($panel) {
-		return $panel.find('.rjm-css-mode-input:checked').val() || 'generate';
+		return $panel.find('.rjm-css-mode-input:checked').val() || 'ask';
 	}
 
 	// -------------------------------------------------------------------------

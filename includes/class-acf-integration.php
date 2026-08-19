@@ -463,7 +463,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 */
 	private static function detect_native_settings( $field, $field_name, $layout_name ) {
 		if ( 'global_custom_css' === $field_name ) {
-			$global_context = self::find_field_definition_context( $field_name, '' );
+			$global_context = self::find_field_definition_context_by_name( $field_name, '' );
 			$candidate_fields = $global_context['sub_fields'] ?? [];
 
 			$settings = [];
@@ -475,10 +475,13 @@ class RJM_CSS_Advisor_ACF_Integration {
 			return $settings;
 		}
 
-		$layout_context = self::find_field_definition_context( $field_name, $layout_name );
+		$field_key = (string) ( $field['key'] ?? '' );
+		$layout_context = '' !== $field_key
+			? self::find_field_definition_context_by_key( $field_key )
+			: self::find_field_definition_context_by_name( $field_name, $layout_name );
 		$layout_fields  = $layout_context['sub_fields'] ?? [];
 
-		$global_context = self::find_field_definition_context( 'global_custom_css', '' );
+		$global_context = self::find_field_definition_context_by_name( 'global_custom_css', '' );
 		$global_fields  = $global_context['sub_fields'] ?? [];
 
 		$settings = [];
@@ -533,7 +536,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 * @param string $layout_name  Flexible-content layout name, or '' for a plain field.
 	 * @return array{sub_fields: array}|null
 	 */
-	private static function find_field_definition_context( $field_name, $layout_name ) {
+	private static function find_field_definition_context_by_name( $field_name, $layout_name ) {
 		static $cache = [];
 		$cache_key = $field_name . '|' . $layout_name;
 
@@ -555,6 +558,39 @@ class RJM_CSS_Advisor_ACF_Integration {
 		}
 
 		$cache[ $cache_key ] = $result;
+
+		return $result;
+	}
+
+	/**
+	 * Locate the sibling field list for a globally unique ACF field key. Unlike
+	 * names, field keys remain unambiguous when ACF's active render-loop layout
+	 * cannot be resolved.
+	 *
+	 * @param string $field_key
+	 * @return array{sub_fields: array}|null
+	 */
+	private static function find_field_definition_context_by_key( $field_key ) {
+		static $cache = [];
+
+		if ( array_key_exists( $field_key, $cache ) ) {
+			return $cache[ $field_key ];
+		}
+
+		$result = null;
+
+		if ( function_exists( 'acf_get_field_groups' ) && function_exists( 'acf_get_fields' ) ) {
+			foreach ( (array) acf_get_field_groups() as $group ) {
+				$fields = acf_get_fields( $group ) ?: [];
+				$found  = self::search_fields_for_key( $fields, $field_key );
+				if ( null !== $found ) {
+					$result = $found;
+					break;
+				}
+			}
+		}
+
+		$cache[ $field_key ] = $result;
 
 		return $result;
 	}
@@ -598,6 +634,49 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 			if ( in_array( $type, self::CONTAINER_FIELD_TYPES, true ) && ! empty( $sub_field['sub_fields'] ) ) {
 				$found = self::search_fields_for_name( $sub_field['sub_fields'], $field_name, $layout_name );
+				if ( null !== $found ) {
+					return $found;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Recursively search a static field list for a globally unique field key.
+	 * Every flexible-content layout is searched because the key itself is the
+	 * unambiguous identifier, independent of the active render loop.
+	 *
+	 * @param array  $fields
+	 * @param string $field_key
+	 * @return array{sub_fields: array}|null
+	 */
+	private static function search_fields_for_key( $fields, $field_key ) {
+		foreach ( (array) $fields as $sub_field ) {
+			if ( ! is_array( $sub_field ) ) {
+				continue;
+			}
+
+			if ( ( $sub_field['key'] ?? '' ) === $field_key ) {
+				return [ 'sub_fields' => $fields ];
+			}
+
+			$type = (string) ( $sub_field['type'] ?? '' );
+
+			if ( 'flexible_content' === $type && ! empty( $sub_field['layouts'] ) ) {
+				foreach ( (array) $sub_field['layouts'] as $layout ) {
+					$found = self::search_fields_for_key( $layout['sub_fields'] ?? [], $field_key );
+					if ( null !== $found ) {
+						return $found;
+					}
+				}
+
+				continue;
+			}
+
+			if ( in_array( $type, self::CONTAINER_FIELD_TYPES, true ) && ! empty( $sub_field['sub_fields'] ) ) {
+				$found = self::search_fields_for_key( $sub_field['sub_fields'], $field_key );
 				if ( null !== $found ) {
 					return $found;
 				}

@@ -1958,14 +1958,18 @@ Goal:
 Output rules:
 1. First write your reply to the user as plain prose. Be concise and practical.
 2. You may use light Markdown in that prose: **bold**, bullet lists, `inline code`, and fenced code blocks.
-3. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
-4. That JSON object must have exactly these keys: ready_to_generate (boolean), brief (string).
-5. ready_to_generate should be true only when enough detail exists to produce CSS.
-6. brief should be a compact summary the generator can use directly.
-7. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
-8. Never mention the sentinel, the JSON, or these rules to the user.
-9. If the context includes a NATIVE STYLING OPTIONS list and the user's goal can be satisfied by one of those fields, say so in your prose reply (name the field) and reflect it in brief so the generator step inherits the same guidance. Only fall back to custom CSS for what native options can't cover.
-10. If both a component-specific override and a global theme default are listed for the same property, mention the component-specific one, since it only affects this instance.
+3. If the context includes a NATIVE STYLING OPTIONS list and one or more of those fields fully satisfy the goal, do NOT draft illustrative CSS for that part. Say so in prose instead (name the exact field) and reflect it in brief. Only draft/describe CSS for whatever the native options don't cover.
+4. If both a component-specific override and a global theme default are listed for the same property, mention the component-specific one, since it only affects this instance.
+5. If you do illustrate CSS in a fenced code block, use only these exact responsive media queries when relevant — do not assume any other breakpoint values (e.g. do not use Bootstrap's default 992px desktop breakpoint):
+   - Mobile:  @media (max-width: 767.98px)
+   - Tablet:  @media (min-width: 768px) and (max-width: 1199.98px)
+   - Desktop: @media (min-width: 1200px)
+6. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
+7. That JSON object must have exactly these keys: ready_to_generate (boolean), brief (string).
+8. ready_to_generate should be true only when enough detail exists to produce CSS.
+9. brief should be a compact summary the generator can use directly.
+10. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
+11. Never mention the sentinel, the JSON, or these rules to the user.
 
 Example of a complete reply:
 Got it — I'll target the `.hero-title` heading and scale it down on mobile.

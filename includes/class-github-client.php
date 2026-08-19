@@ -87,7 +87,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @return array|WP_Error  { css: string }
 	 */
 	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $screenshot_data = '', $native_settings = [] ) {
-		$selected_breakpoints = is_array( $breakpoints ) ? $breakpoints : [];
+		$selected_breakpoints = $this->merge_inferred_breakpoints( $breakpoints, $goal );
 		$existing_css_block   = $this->build_existing_css_context_block( $existing_css_context );
 		$is_global            = $is_global || ( 'global_custom_css' === $field_name );
 
@@ -288,7 +288,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $context;
 		}
 
-		$prompt = "Selected breakpoints: " . implode( ', ', $this->normalize_selected_breakpoints( $breakpoints ) ) . "\n\n";
+		$prompt = "Selected breakpoints: " . implode( ', ', $this->merge_inferred_breakpoints( $breakpoints, $this->format_chat_messages_for_prompt( $messages ) ) ) . "\n\n";
 		$prompt .= "Context:\n" . $context['context'] . "\n\n";
 		$prompt .= $this->build_native_settings_context( $native_settings );
 		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
@@ -372,7 +372,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$message  = "Goal: " . $goal . "\n";
-		$message .= $this->build_breakpoint_context( $breakpoints ) . "\n\n";
+		$message .= $this->build_breakpoint_context( $this->merge_inferred_breakpoints( $breakpoints, $goal ) ) . "\n\n";
 		$message .= "Context:\n" . $context['context'];
 		$message .= $this->build_native_settings_context( $native_settings );
 		$message .= $this->build_existing_css_context_block( $existing_css_context );
@@ -431,7 +431,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @return array|WP_Error
 	 */
 	public function generate_css_build_step( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $step = '', $approved_css = '', $breakpoints = [], $revision_feedback = '', $existing_css_context = '', $native_settings = [] ) {
-		$selected_breakpoints = is_array( $breakpoints ) ? $breakpoints : [];
+		$selected_breakpoints = $this->merge_inferred_breakpoints( $breakpoints, $goal, $step, $revision_feedback );
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
 			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
@@ -1092,6 +1092,7 @@ PROMPT;
 
 			$retry_repaired = $this->repair_css_for_breakpoint_policy( (string) ( $retry_parsed['css'] ?? '' ), $selected );
 			if ( $this->validate_breakpoint_css_policy( $retry_repaired, $selected )['valid'] ) {
+				$retry_parsed = $this->flag_stripped_css_explanation( $retry_parsed, (string) ( $retry_parsed['css'] ?? '' ), $retry_repaired );
 				$retry_parsed['css'] = $retry_repaired;
 				return $this->append_policy_recommendation( $retry_parsed, __( 'Breakpoint-only output policy was enforced by filtering unsupported rules.', 'rjm-css-advisor' ) );
 			}
@@ -1099,6 +1100,7 @@ PROMPT;
 
 		$repaired = $this->repair_css_for_breakpoint_policy( $css, $selected );
 		if ( $this->validate_breakpoint_css_policy( $repaired, $selected )['valid'] ) {
+			$parsed = $this->flag_stripped_css_explanation( $parsed, $css, $repaired );
 			$parsed['css'] = $repaired;
 			return $this->append_policy_recommendation( $parsed, __( 'Breakpoint-only output policy was enforced by filtering unsupported rules.', 'rjm-css-advisor' ) );
 		}
@@ -1357,6 +1359,44 @@ PROMPT;
 	}
 
 	/**
+	 * Detect explicit breakpoint language in free-text user input (goal, message,
+	 * feedback) so a plain-English request like "30px on desktop ... on mobile"
+	 * is treated as an implicit breakpoint selection even if no checkbox was
+	 * ticked. Without this, enforce_breakpoint_policy() strips any @media block
+	 * the AI writes whenever the breakpoint checkboxes are left unselected,
+	 * silently deleting CSS the user explicitly asked for.
+	 *
+	 * Only infers when nothing was explicitly selected — an explicit checkbox
+	 * selection always takes priority and is returned as-is.
+	 *
+	 * @param array  $breakpoints
+	 * @param string ...$texts
+	 * @return array
+	 */
+	private function merge_inferred_breakpoints( $breakpoints, ...$texts ) {
+		$selected = $this->normalize_selected_breakpoints( $breakpoints );
+		if ( $selected ) {
+			return $selected;
+		}
+
+		$combined = strtolower( implode( ' ', array_map( 'strval', $texts ) ) );
+		$patterns = [
+			'mobile'  => '/\b(mobile|phone|small screens?)\b/i',
+			'tablet'  => '/\btablet\b/i',
+			'desktop' => '/\b(desktop|large screens?)\b/i',
+		];
+
+		$inferred = [];
+		foreach ( $patterns as $breakpoint => $pattern ) {
+			if ( preg_match( $pattern, $combined ) ) {
+				$inferred[] = $breakpoint;
+			}
+		}
+
+		return $inferred;
+	}
+
+	/**
 	 * Build selected media header map.
 	 *
 	 * @param array $selected_breakpoints
@@ -1428,6 +1468,25 @@ PROMPT;
 		$parsed['recommendations'] = $this->normalize_string_list( $parsed['recommendations'] ?? [] );
 		$parsed['recommendations'][] = trim( (string) $message );
 		$parsed['recommendations'] = array_values( array_unique( array_filter( $parsed['recommendations'] ) ) );
+		return $parsed;
+	}
+
+	/**
+	 * When breakpoint-policy repair actually removed CSS, correct the explanation
+	 * text so the UI doesn't keep describing changes that were just deleted.
+	 *
+	 * @param array  $parsed
+	 * @param string $original_css
+	 * @param string $repaired_css
+	 * @return array
+	 */
+	private function flag_stripped_css_explanation( $parsed, $original_css, $repaired_css ) {
+		if ( trim( (string) $original_css ) === trim( (string) $repaired_css ) ) {
+			return $parsed;
+		}
+
+		$parsed['explanation'] = __( 'Some of the requested CSS used breakpoints that were not selected, so it was removed. Select the relevant breakpoint(s) and try again if you need those styles.', 'rjm-css-advisor' );
+
 		return $parsed;
 	}
 

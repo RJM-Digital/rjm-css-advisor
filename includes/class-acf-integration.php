@@ -159,7 +159,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 		$field_name      = $field['_name'] ?? $field['name'] ?? 'custom_css';
 		$field_key       = $field['key'] ?? '';
 		$is_global       = ( $field_name === 'global_custom_css' );
-		$native_settings = self::detect_native_settings( $field, $field_name );
+		$native_settings = self::detect_native_settings( $field, $field_name, $layout_name );
 
 		$panel_id = 'rjm-advice-' . wp_generate_uuid4();
 		$goal_id  = 'rjm-goal-'   . wp_generate_uuid4();
@@ -436,10 +436,6 @@ class RJM_CSS_Advisor_ACF_Integration {
 	// Field name/label keywords that suggest a visual styling control.
 	const STYLE_KEYWORD_PATTERN = '/color|colour|font|size|weight|hover|align|spacing|margin|padding|radius|shadow|border|background|\bbg\b|opacity|width|height|style|underline|italic|bold/i';
 
-	// Field key of the global_custom_css field, used to locate the site-wide
-	// Theme Settings field group where global typography/colour defaults live.
-	const GLOBAL_CSS_FIELD_KEY = 'field_6964fb66b09f1';
-
 	/**
 	 * Find ACF fields that look like native styling controls (colors, sizes,
 	 * hover toggles, etc.) relevant to the component being styled, so the AI
@@ -454,24 +450,28 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 *
 	 * @param array  $field       ACF field definition for the CSS field itself.
 	 * @param string $field_name  Resolved name of the CSS field.
+	 * @param string $layout_name Resolved flexible-content layout name, or '' for the global field.
 	 * @return array  List of { label, name, type, choices, scope }.
 	 */
-	private static function detect_native_settings( $field, $field_name ) {
+	private static function detect_native_settings( $field, $field_name, $layout_name ) {
 		if ( 'global_custom_css' === $field_name ) {
+			$global_context = self::find_field_definition_context( $field_name, '' );
+			$candidate_fields = $global_context['sub_fields'] ?? [];
+
 			$settings = [];
 			$seen = [];
-			self::collect_style_fields( self::get_theme_settings_style_fields(), $field_name, 'global', $settings, $seen );
+			self::collect_style_fields( $candidate_fields, $field_name, 'global', $settings, $seen );
+
+			self::log_native_settings_detection( $field_name, $layout_name, $candidate_fields, $settings );
 
 			return $settings;
 		}
 
-		$layout_fields = [];
-		if ( function_exists( 'acf_get_loop' ) ) {
-			$loop = acf_get_loop( 'active' );
-			if ( $loop && ! empty( $loop['layout']['sub_fields'] ) ) {
-				$layout_fields = $loop['layout']['sub_fields'];
-			}
-		}
+		$layout_context = self::find_field_definition_context( $field_name, $layout_name );
+		$layout_fields  = $layout_context['sub_fields'] ?? [];
+
+		$global_context = self::find_field_definition_context( 'global_custom_css', '' );
+		$global_fields  = $global_context['sub_fields'] ?? [];
 
 		$settings = [];
 
@@ -481,44 +481,124 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 		// Site-wide defaults these components fall back to.
 		$seen_global = [];
-		self::collect_style_fields( self::get_theme_settings_style_fields(), $field_name, 'global', $settings, $seen_global );
+		self::collect_style_fields( $global_fields, $field_name, 'global', $settings, $seen_global );
 
-		if ( RJM_CSS_Advisor_Settings::is_debug_enabled() ) {
-			RJM_CSS_Advisor_Settings::add_debug_entry( 'acf_integration', 'detect_native_settings', 'success', [
-				'field'      => $field_name,
-				'candidates' => count( $layout_fields ),
-				'matched'    => count( $settings ),
-			] );
-		}
+		self::log_native_settings_detection( $field_name, $layout_name, $layout_fields, $settings );
 
 		return $settings;
 	}
 
 	/**
-	 * Fetch the fields from the site-wide Theme Settings field group
-	 * (identified via the global_custom_css field's parent group).
+	 * Record a debug entry describing what the detector found, when debug logging is enabled.
 	 *
-	 * @return array
+	 * @param string $field_name
+	 * @param string $layout_name
+	 * @param array  $candidate_fields
+	 * @param array  $settings
+	 * @return void
 	 */
-	private static function get_theme_settings_style_fields() {
-		static $cache = null;
-		if ( null !== $cache ) {
-			return $cache;
+	private static function log_native_settings_detection( $field_name, $layout_name, $candidate_fields, $settings ) {
+		if ( ! RJM_CSS_Advisor_Settings::is_debug_enabled() ) {
+			return;
 		}
 
-		$cache = [];
-		if ( function_exists( 'acf_get_field' ) && function_exists( 'acf_get_field_group' ) && function_exists( 'acf_get_fields' ) ) {
-			$global_field = acf_get_field( self::GLOBAL_CSS_FIELD_KEY );
-			if ( $global_field && ! empty( $global_field['parent'] ) ) {
-				$group = acf_get_field_group( $global_field['parent'] );
-				if ( $group ) {
-					$cache = acf_get_fields( $group ) ?: [];
+		RJM_CSS_Advisor_Settings::add_debug_entry( 'acf_integration', 'detect_native_settings', 'success', [
+			'field'      => $field_name,
+			'layout'     => $layout_name,
+			'candidates' => count( $candidate_fields ),
+			'matched'    => count( $settings ),
+		] );
+	}
+
+	/**
+	 * Locate the sibling field list for a given field name by searching every
+	 * registered/synced ACF field group's static definition — not the live
+	 * render loop, which does not reliably expose field schemas at the point
+	 * the advice button is rendered.
+	 *
+	 * When $layout_name is given, only a flexible_content layout with that
+	 * exact name is matched, so fields sharing a name across multiple layouts
+	 * (e.g. "custom_css" used by several component types) resolve to the
+	 * correct layout's siblings rather than the first one found.
+	 *
+	 * @param string $field_name
+	 * @param string $layout_name  Flexible-content layout name, or '' for a plain field.
+	 * @return array{sub_fields: array}|null
+	 */
+	private static function find_field_definition_context( $field_name, $layout_name ) {
+		static $cache = [];
+		$cache_key = $field_name . '|' . $layout_name;
+
+		if ( array_key_exists( $cache_key, $cache ) ) {
+			return $cache[ $cache_key ];
+		}
+
+		$result = null;
+
+		if ( function_exists( 'acf_get_field_groups' ) && function_exists( 'acf_get_fields' ) ) {
+			foreach ( (array) acf_get_field_groups() as $group ) {
+				$fields = acf_get_fields( $group ) ?: [];
+				$found  = self::search_fields_for_name( $fields, $field_name, $layout_name );
+				if ( null !== $found ) {
+					$result = $found;
+					break;
 				}
 			}
 		}
 
-		return $cache;
+		$cache[ $cache_key ] = $result;
+
+		return $result;
 	}
+
+	/**
+	 * Recursively search a static field list for a field by name, descending
+	 * into flexible_content layouts (restricted to $layout_name when given)
+	 * and Group/Clone containers.
+	 *
+	 * @param array  $fields
+	 * @param string $field_name
+	 * @param string $layout_name
+	 * @return array{sub_fields: array}|null
+	 */
+	private static function search_fields_for_name( $fields, $field_name, $layout_name ) {
+		foreach ( (array) $fields as $sub_field ) {
+			if ( ! is_array( $sub_field ) ) {
+				continue;
+			}
+
+			if ( ( $sub_field['name'] ?? '' ) === $field_name ) {
+				return [ 'sub_fields' => $fields ];
+			}
+
+			$type = (string) ( $sub_field['type'] ?? '' );
+
+			if ( 'flexible_content' === $type && ! empty( $sub_field['layouts'] ) ) {
+				foreach ( (array) $sub_field['layouts'] as $layout ) {
+					if ( '' !== $layout_name && ( $layout['name'] ?? '' ) !== $layout_name ) {
+						continue;
+					}
+
+					$found = self::search_fields_for_name( $layout['sub_fields'] ?? [], $field_name, $layout_name );
+					if ( null !== $found ) {
+						return $found;
+					}
+				}
+
+				continue;
+			}
+
+			if ( in_array( $type, self::CONTAINER_FIELD_TYPES, true ) && ! empty( $sub_field['sub_fields'] ) ) {
+				$found = self::search_fields_for_name( $sub_field['sub_fields'], $field_name, $layout_name );
+				if ( null !== $found ) {
+					return $found;
+				}
+			}
+		}
+
+		return null;
+	}
+
 
 	/**
 	 * Walk a flat list of ACF sub-fields, recursing into Group/Clone containers,

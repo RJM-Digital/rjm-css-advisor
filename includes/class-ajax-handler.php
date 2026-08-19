@@ -1589,7 +1589,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		}
 
 		$settings = [];
-		foreach ( array_slice( $decoded, 0, 20 ) as $entry ) {
+		foreach ( array_slice( $decoded, 0, 80 ) as $entry ) {
 			if ( ! is_array( $entry ) ) {
 				continue;
 			}
@@ -1609,11 +1609,17 @@ class RJM_CSS_Advisor_Ajax_Handler {
 				}
 			}
 
+			$scope = sanitize_key( (string) ( $entry['scope'] ?? '' ) );
+			if ( ! in_array( $scope, [ 'component', 'global' ], true ) ) {
+				$scope = 'component';
+			}
+
 			$settings[] = [
 				'label'   => sanitize_text_field( mb_substr( (string) ( $entry['label'] ?? '' ), 0, 80 ) ),
 				'name'    => $name,
 				'type'    => sanitize_key( (string) ( $entry['type'] ?? '' ) ),
 				'choices' => $choices,
+				'scope'   => $scope,
 			];
 		}
 

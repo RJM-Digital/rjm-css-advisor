@@ -1000,6 +1000,7 @@ Output rules — follow these exactly:
 8. Prefer :root {} CSS custom property overrides where applicable.
 9. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 10. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
+11. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
 PROMPT;
 		}
 
@@ -1027,6 +1028,7 @@ Output rules — follow these exactly:
 13. Keep output concise and targeted to the stated goal only.
 14. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 15. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
+16. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
 PROMPT;
 	}
 
@@ -1859,6 +1861,7 @@ Output rules:
 7. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
 8. Never mention the sentinel, the JSON, or these rules to the user.
 9. If the context includes a NATIVE STYLING OPTIONS list and the user's goal can be satisfied by one of those fields, say so in your prose reply (name the field) and reflect it in brief so the generator step inherits the same guidance. Only fall back to custom CSS for what native options can't cover.
+10. If both a component-specific override and a global theme default are listed for the same property, mention the component-specific one, since it only affects this instance.
 
 Example of a complete reply:
 Got it — I'll target the `.hero-title` heading and scale it down on mobile.
@@ -1882,6 +1885,7 @@ Output rules:
 3. steps must be an array of 3-6 short step descriptions.
 4. Each step should focus on one styling objective and be implementation-ready.
 5. If the context includes a NATIVE STYLING OPTIONS list, skip steps for anything fully covered by one of those fields; phrase such a step as an instruction to use the native field instead of writing CSS for it.
+6. Prefer a component-specific override over a global theme default when both are listed for the same property.
 PROMPT;
 	}
 
@@ -1916,6 +1920,7 @@ Output rules:
 6. Do not include markdown fences.
 7. If the context includes a NATIVE STYLING OPTIONS list and it fully satisfies this step, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 8. If native options only partially satisfy this step, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
+9. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
 PROMPT;
 	}
 
@@ -1924,7 +1929,12 @@ PROMPT;
 	 * that already cover parts of the styling surface, so prompts can prefer
 	 * recommending those over duplicating them with custom CSS.
 	 *
-	 * @param array $native_settings  List of { label, name, type, choices }.
+	 * Component-scoped fields (this instance's own overrides, e.g. a Hero's
+	 * Font Settings tab) are listed separately from global-scoped fields
+	 * (site-wide Theme Settings defaults), since the former should be
+	 * preferred when both exist for the same visual property.
+	 *
+	 * @param array $native_settings  List of { label, name, type, choices, scope }.
 	 * @return string
 	 */
 	private function build_native_settings_context( $native_settings ) {
@@ -1936,7 +1946,9 @@ PROMPT;
 			return '';
 		}
 
-		$lines = [];
+		$component_lines = [];
+		$global_lines     = [];
+
 		foreach ( $native_settings as $setting ) {
 			$label   = trim( (string) ( $setting['label'] ?? '' ) ) ?: (string) $setting['name'];
 			$type    = trim( (string) ( $setting['type'] ?? '' ) );
@@ -1951,13 +1963,30 @@ PROMPT;
 			}
 			$line .= ' (field: ' . $setting['name'] . ')';
 
-			$lines[] = $line;
+			if ( 'global' === ( $setting['scope'] ?? '' ) ) {
+				$global_lines[] = $line;
+			} else {
+				$component_lines[] = $line;
+			}
 		}
 
-		return "\n\nNATIVE STYLING OPTIONS (already editable in the WordPress admin, without custom CSS):\n"
-			. implode( "\n", $lines )
-			. "\nPrefer these over custom CSS whenever they fully or partially satisfy the user's request.";
+		$context = "\n\nNATIVE STYLING OPTIONS (already editable in the WordPress admin, without custom CSS):";
+
+		if ( $component_lines ) {
+			$context .= "\n\nComponent-specific overrides (apply only to this instance — prefer these first):\n"
+				. implode( "\n", $component_lines );
+		}
+
+		if ( $global_lines ) {
+			$context .= "\n\nGlobal theme defaults (apply site-wide — use only if there is no component-specific override above for the same property, or the user explicitly wants a site-wide change):\n"
+				. implode( "\n", $global_lines );
+		}
+
+		$context .= "\nPrefer these native settings over custom CSS whenever they fully or partially satisfy the user's request.";
+
+		return $context;
 	}
+
 
 	/**
 	 * Build an existing CSS context block with smart compaction to control token usage.

@@ -419,64 +419,160 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 	// ACF field types never considered a styling control.
 	const STRUCTURAL_FIELD_TYPES = [
-		'tab', 'message', 'accordion', 'clone', 'group', 'repeater', 'flexible_content',
+		'tab', 'message', 'accordion', 'repeater', 'flexible_content',
 		'gallery', 'relationship', 'post_object', 'taxonomy', 'user', 'image', 'file',
 	];
+
+	// Container field types whose sub_fields are scanned recursively (ACF Group/Clone
+	// fields are sometimes used to bundle shared style controls).
+	const CONTAINER_FIELD_TYPES = [ 'group', 'clone' ];
 
 	// ACF field types that are always treated as a styling control when present.
 	const ALWAYS_STYLE_FIELD_TYPES = [ 'color_picker', 'range' ];
 
 	// ACF field types only treated as styling controls when their name/label matches a style keyword.
-	const KEYWORD_STYLE_FIELD_TYPES = [ 'select', 'radio', 'button_group', 'true_false', 'text', 'number' ];
+	const KEYWORD_STYLE_FIELD_TYPES = [ 'select', 'radio', 'button_group', 'true_false', 'text', 'number', 'checkbox' ];
 
 	// Field name/label keywords that suggest a visual styling control.
 	const STYLE_KEYWORD_PATTERN = '/color|colour|font|size|weight|hover|align|spacing|margin|padding|radius|shadow|border|background|\bbg\b|opacity|width|height|style|underline|italic|bold/i';
 
+	// Field key of the global_custom_css field, used to locate the site-wide
+	// Theme Settings field group where global typography/colour defaults live.
+	const GLOBAL_CSS_FIELD_KEY = 'field_6964fb66b09f1';
+
 	/**
-	 * Find sibling ACF fields on the same layout/field group that look like
-	 * native styling controls (colors, sizes, hover toggles, etc.), so the AI
+	 * Find ACF fields that look like native styling controls (colors, sizes,
+	 * hover toggles, etc.) relevant to the component being styled, so the AI
 	 * can recommend those instead of duplicating them with custom CSS.
+	 *
+	 * Two scopes are collected and kept distinct: 'component' fields defined on
+	 * this specific layout (e.g. Hero's own Font Settings tab overrides, often
+	 * labelled Heading/Subheading/Body rather than H1/H2), and 'global' fields
+	 * from the site-wide Theme Settings field group (the H1-H6 etc. defaults
+	 * components fall back to). Both are surfaced so the AI can prefer the more
+	 * specific component override when one exists.
 	 *
 	 * @param array  $field       ACF field definition for the CSS field itself.
 	 * @param string $field_name  Resolved name of the CSS field.
-	 * @return array  List of { label, name, type, choices }.
+	 * @return array  List of { label, name, type, choices, scope }.
 	 */
 	private static function detect_native_settings( $field, $field_name ) {
-		$sub_fields = [];
-
 		if ( 'global_custom_css' === $field_name ) {
-			if ( function_exists( 'acf_get_field_group' ) && function_exists( 'acf_get_fields' ) && ! empty( $field['parent'] ) ) {
-				$group = acf_get_field_group( $field['parent'] );
-				if ( $group ) {
-					$sub_fields = acf_get_fields( $group ) ?: [];
-				}
-			}
-		} elseif ( function_exists( 'acf_get_loop' ) ) {
+			$settings = [];
+			$seen = [];
+			self::collect_style_fields( self::get_theme_settings_style_fields(), $field_name, 'global', $settings, $seen );
+
+			return $settings;
+		}
+
+		$layout_fields = [];
+		if ( function_exists( 'acf_get_loop' ) ) {
 			$loop = acf_get_loop( 'active' );
 			if ( $loop && ! empty( $loop['layout']['sub_fields'] ) ) {
-				$sub_fields = $loop['layout']['sub_fields'];
+				$layout_fields = $loop['layout']['sub_fields'];
 			}
 		}
 
 		$settings = [];
-		foreach ( (array) $sub_fields as $sub_field ) {
-			if ( ! is_array( $sub_field ) || ! self::is_style_related_field( $sub_field, $field_name ) ) {
+
+		// Component-specific overrides first, so they're prioritised if the total is capped.
+		$seen_component = [];
+		self::collect_style_fields( $layout_fields, $field_name, 'component', $settings, $seen_component );
+
+		// Site-wide defaults these components fall back to.
+		$seen_global = [];
+		self::collect_style_fields( self::get_theme_settings_style_fields(), $field_name, 'global', $settings, $seen_global );
+
+		if ( RJM_CSS_Advisor_Settings::is_debug_enabled() ) {
+			RJM_CSS_Advisor_Settings::add_debug_entry( 'acf_integration', 'detect_native_settings', 'success', [
+				'field'      => $field_name,
+				'candidates' => count( $layout_fields ),
+				'matched'    => count( $settings ),
+			] );
+		}
+
+		return $settings;
+	}
+
+	/**
+	 * Fetch the fields from the site-wide Theme Settings field group
+	 * (identified via the global_custom_css field's parent group).
+	 *
+	 * @return array
+	 */
+	private static function get_theme_settings_style_fields() {
+		static $cache = null;
+		if ( null !== $cache ) {
+			return $cache;
+		}
+
+		$cache = [];
+		if ( function_exists( 'acf_get_field' ) && function_exists( 'acf_get_field_group' ) && function_exists( 'acf_get_fields' ) ) {
+			$global_field = acf_get_field( self::GLOBAL_CSS_FIELD_KEY );
+			if ( $global_field && ! empty( $global_field['parent'] ) ) {
+				$group = acf_get_field_group( $global_field['parent'] );
+				if ( $group ) {
+					$cache = acf_get_fields( $group ) ?: [];
+				}
+			}
+		}
+
+		return $cache;
+	}
+
+	/**
+	 * Walk a flat list of ACF sub-fields, recursing into Group/Clone containers,
+	 * and append any style-related field found to $settings (capped at 80 total,
+	 * de-duplicated by label within this scope since the same setting often
+	 * repeats per breakpoint with an identical label).
+	 *
+	 * @param array  $fields
+	 * @param string $exclude_name
+	 * @param string $scope         'component' or 'global'.
+	 * @param array  $settings
+	 * @param array  $seen_labels
+	 * @param int    $depth
+	 * @return void
+	 */
+	private static function collect_style_fields( $fields, $exclude_name, $scope, array &$settings, array &$seen_labels, $depth = 0 ) {
+		if ( $depth > 3 ) {
+			return;
+		}
+
+		foreach ( (array) $fields as $sub_field ) {
+			if ( count( $settings ) >= 80 ) {
+				return;
+			}
+
+			if ( ! is_array( $sub_field ) ) {
 				continue;
 			}
+
+			$type = (string) ( $sub_field['type'] ?? '' );
+
+			if ( in_array( $type, self::CONTAINER_FIELD_TYPES, true ) && ! empty( $sub_field['sub_fields'] ) ) {
+				self::collect_style_fields( $sub_field['sub_fields'], $exclude_name, $scope, $settings, $seen_labels, $depth + 1 );
+				continue;
+			}
+
+			if ( ! self::is_style_related_field( $sub_field, $exclude_name ) ) {
+				continue;
+			}
+
+			$label_key = strtolower( trim( (string) ( $sub_field['label'] ?? '' ) ) );
+			if ( '' === $label_key || isset( $seen_labels[ $label_key ] ) ) {
+				continue;
+			}
+			$seen_labels[ $label_key ] = true;
 
 			$settings[] = [
 				'label'   => sanitize_text_field( mb_substr( (string) ( $sub_field['label'] ?? '' ), 0, 80 ) ),
 				'name'    => sanitize_key( $sub_field['name'] ?? '' ),
 				'type'    => sanitize_key( $sub_field['type'] ?? '' ),
 				'choices' => self::extract_choices( $sub_field ),
+				'scope'   => $scope,
 			];
-
-			if ( count( $settings ) >= 20 ) {
-				break;
-			}
 		}
-
-		return $settings;
 	}
 
 	/**

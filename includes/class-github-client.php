@@ -88,6 +88,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 */
 	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $screenshot_data = '', $native_settings = [] ) {
 		$selected_breakpoints = $this->merge_inferred_breakpoints( $breakpoints, $goal );
+		$allow_custom_range   = ! $selected_breakpoints && $this->has_custom_pixel_range( $goal );
 		$existing_css_block   = $this->build_existing_css_context_block( $existing_css_context );
 		$is_global            = $is_global || ( 'global_custom_css' === $field_name );
 
@@ -106,7 +107,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $context;
 		}
 
-		$user_message  = "Goal: {$goal}" . $this->build_breakpoint_context( $selected_breakpoints ) . "\n\n";
+		$user_message  = "Goal: {$goal}" . $this->build_breakpoint_context( $selected_breakpoints, $allow_custom_range ) . "\n\n";
 		$user_message .= "Context:\n" . $context['context'];
 		$user_message .= $this->build_native_settings_context( $native_settings );
 		$user_message .= $existing_css_block;
@@ -129,7 +130,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $parsed;
 		}
 
-		return $this->enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints );
+		return $this->enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints, $allow_custom_range );
 	}
 
 	/**
@@ -372,7 +373,8 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$message  = "Goal: " . $goal . "\n";
-		$message .= $this->build_breakpoint_context( $this->merge_inferred_breakpoints( $breakpoints, $goal ) ) . "\n\n";
+		$plan_breakpoints = $this->merge_inferred_breakpoints( $breakpoints, $goal );
+		$message .= $this->build_breakpoint_context( $plan_breakpoints, ! $plan_breakpoints && $this->has_custom_pixel_range( $goal ) ) . "\n\n";
 		$message .= "Context:\n" . $context['context'];
 		$message .= $this->build_native_settings_context( $native_settings );
 		$message .= $this->build_existing_css_context_block( $existing_css_context );
@@ -432,6 +434,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 */
 	public function generate_css_build_step( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $step = '', $approved_css = '', $breakpoints = [], $revision_feedback = '', $existing_css_context = '', $native_settings = [] ) {
 		$selected_breakpoints = $this->merge_inferred_breakpoints( $breakpoints, $goal, $step, $revision_feedback );
+		$allow_custom_range   = ! $selected_breakpoints && $this->has_custom_pixel_range( $goal, $step, $revision_feedback );
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
 			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
@@ -455,7 +458,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			$user_message .= "Revision feedback for this step: {$revision_feedback}\n";
 		}
 
-		$user_message .= $this->build_breakpoint_context( $selected_breakpoints ) . "\n\n";
+		$user_message .= $this->build_breakpoint_context( $selected_breakpoints, $allow_custom_range ) . "\n\n";
 		$user_message .= "Context:\n" . $context['context'];
 		$user_message .= $this->build_native_settings_context( $native_settings );
 		$user_message .= $this->build_existing_css_context_block( $existing_css_context );
@@ -478,7 +481,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $parsed;
 		}
 
-		return $this->enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints );
+		return $this->enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints, $allow_custom_range );
 	}
 
 	/**
@@ -1023,12 +1026,13 @@ Output rules — follow these exactly:
 			11. If no breakpoints are selected, do NOT output responsive media queries.
 			12. Use only these responsive media queries when applicable:
    - Mobile:  @media (max-width: 767.98px)
-   - Tablet:  @media (min-width: 768px) and (max-width: 991.98px)
-   - Desktop: @media (min-width: 992px)
+   - Tablet:  @media (min-width: 768px) and (max-width: 1199.98px)
+   - Desktop: @media (min-width: 1200px)
 13. Keep output concise and targeted to the stated goal only.
 14. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 15. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 16. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
+17. If the goal specifies an exact custom pixel range that doesn't align with the standard Mobile/Tablet/Desktop breakpoints, output a single @media block using the literal min-width/max-width values from the goal instead of snapping to the standard breakpoints.
 PROMPT;
 	}
 
@@ -1038,7 +1042,7 @@ PROMPT;
 	 * @param array $breakpoints
 	 * @return string
 	 */
-	private function build_breakpoint_context( $breakpoints ) {
+	private function build_breakpoint_context( $breakpoints, $allow_custom_range = false ) {
 		$labels = [];
 		$map    = [
 			'mobile'  => 'Mobile',
@@ -1054,11 +1058,16 @@ PROMPT;
 		}
 
 		if ( ! $labels ) {
+			if ( $allow_custom_range ) {
+				return "\n\nNo standard breakpoint (Mobile/Tablet/Desktop) selected, but the goal specifies an exact custom pixel range. Output a single @media block using the literal min-width/max-width values from the goal, instead of the standard breakpoints.";
+			}
+
 			return "\n\nNo breakpoints selected. Output base CSS only and do not include responsive media queries.";
 		}
 
 		return "\n\nSelected breakpoints: " . implode( ', ', $labels ) . "\nOutput ONLY @media blocks for these selected breakpoints. Do NOT include any base selector rules outside @media.";
 	}
+
 
 	/**
 	 * Enforce breakpoint policy for generated component CSS.
@@ -1070,11 +1079,11 @@ PROMPT;
 	 * @param array  $selected_breakpoints
 	 * @return array
 	 */
-	private function enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints ) {
+	private function enforce_breakpoint_policy( $token, $user_message, $system_prompt, $parsed, $selected_breakpoints, $allow_custom_range = false ) {
 		$css      = (string) ( $parsed['css'] ?? '' );
 		$selected = $this->normalize_selected_breakpoints( $selected_breakpoints );
 
-		$policy = $this->validate_breakpoint_css_policy( $css, $selected );
+		$policy = $this->validate_breakpoint_css_policy( $css, $selected, $allow_custom_range );
 		if ( $policy['valid'] ) {
 			return $parsed;
 		}
@@ -1084,14 +1093,14 @@ PROMPT;
 
 		if ( ! is_wp_error( $retry_raw ) ) {
 			$retry_parsed = $this->parse_structured_css_response( $retry_raw );
-			$retry_policy = $this->validate_breakpoint_css_policy( (string) ( $retry_parsed['css'] ?? '' ), $selected );
+			$retry_policy = $this->validate_breakpoint_css_policy( (string) ( $retry_parsed['css'] ?? '' ), $selected, $allow_custom_range );
 
 			if ( $retry_policy['valid'] ) {
 				return $this->append_policy_recommendation( $retry_parsed, __( 'Breakpoint-only output policy was enforced automatically.', 'rjm-css-advisor' ) );
 			}
 
 			$retry_repaired = $this->repair_css_for_breakpoint_policy( (string) ( $retry_parsed['css'] ?? '' ), $selected );
-			if ( $this->validate_breakpoint_css_policy( $retry_repaired, $selected )['valid'] ) {
+			if ( $this->validate_breakpoint_css_policy( $retry_repaired, $selected, $allow_custom_range )['valid'] ) {
 				$retry_parsed = $this->flag_stripped_css_explanation( $retry_parsed, (string) ( $retry_parsed['css'] ?? '' ), $retry_repaired );
 				$retry_parsed['css'] = $retry_repaired;
 				return $this->append_policy_recommendation( $retry_parsed, __( 'Breakpoint-only output policy was enforced by filtering unsupported rules.', 'rjm-css-advisor' ) );
@@ -1099,7 +1108,7 @@ PROMPT;
 		}
 
 		$repaired = $this->repair_css_for_breakpoint_policy( $css, $selected );
-		if ( $this->validate_breakpoint_css_policy( $repaired, $selected )['valid'] ) {
+		if ( $this->validate_breakpoint_css_policy( $repaired, $selected, $allow_custom_range )['valid'] ) {
 			$parsed = $this->flag_stripped_css_explanation( $parsed, $css, $repaired );
 			$parsed['css'] = $repaired;
 			return $this->append_policy_recommendation( $parsed, __( 'Breakpoint-only output policy was enforced by filtering unsupported rules.', 'rjm-css-advisor' ) );
@@ -1113,12 +1122,20 @@ PROMPT;
 	 *
 	 * @param string $css
 	 * @param array  $selected_breakpoints
+	 * @param bool   $allow_custom_range  When true, skip the named-tier enum check
+	 *                                    entirely and only confirm the CSS parses —
+	 *                                    used when the goal specified an explicit
+	 *                                    custom pixel range outside mobile/tablet/desktop.
 	 * @return array{valid: bool, reason: string}
 	 */
-	private function validate_breakpoint_css_policy( $css, $selected_breakpoints ) {
+	private function validate_breakpoint_css_policy( $css, $selected_breakpoints, $allow_custom_range = false ) {
 		$blocks = $this->extract_css_top_level_blocks( $css );
 		if ( $blocks === null ) {
 			return [ 'valid' => false, 'reason' => 'parse_failed' ];
+		}
+
+		if ( $allow_custom_range ) {
+			return [ 'valid' => true, 'reason' => '' ];
 		}
 
 		$allowed_headers = $this->get_selected_media_headers( $selected_breakpoints );
@@ -1397,6 +1414,34 @@ PROMPT;
 	}
 
 	/**
+	 * Detect an explicit custom pixel range in free text that doesn't map to the
+	 * named mobile/tablet/desktop tiers (e.g. "992px to 1000px", "between 990 and
+	 * 1010 pixels", or a literal min-width/max-width mention). Best-effort regex
+	 * heuristic, not exhaustive NLP — false negatives just fall back to normal
+	 * tier behaviour, which is the safe default.
+	 *
+	 * @param string ...$texts
+	 * @return bool
+	 */
+	private function has_custom_pixel_range( ...$texts ) {
+		$text = strtolower( implode( ' ', array_map( 'strval', $texts ) ) );
+
+		if ( preg_match( '/\bmin-width\b|\bmax-width\b/', $text ) ) {
+			return true;
+		}
+
+		if ( preg_match( '/\d{2,5}\s*px\s*(-|to)\s*\d{2,5}\s*px/', $text ) ) {
+			return true;
+		}
+
+		if ( preg_match( '/\bbetween\s+\d{2,5}\s*(px)?\s+and\s+\d{2,5}\s*px\b/', $text ) ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
 	 * Build selected media header map.
 	 *
 	 * @param array $selected_breakpoints
@@ -1405,8 +1450,8 @@ PROMPT;
 	private function get_selected_media_headers( $selected_breakpoints ) {
 		$map = [
 			'mobile'  => '@media (max-width: 767.98px)',
-			'tablet'  => '@media (min-width: 768px) and (max-width: 991.98px)',
-			'desktop' => '@media (min-width: 992px)',
+			'tablet'  => '@media (min-width: 768px) and (max-width: 1199.98px)',
+			'desktop' => '@media (min-width: 1200px)',
 		];
 
 		$headers = [];
@@ -1980,6 +2025,7 @@ Output rules:
 7. If the context includes a NATIVE STYLING OPTIONS list and it fully satisfies this step, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 8. If native options only partially satisfy this step, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 9. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
+10. If the goal specifies an exact custom pixel range that doesn't align with the standard Mobile/Tablet/Desktop breakpoints, output a single @media block using the literal min-width/max-width values from the goal instead of snapping to the standard breakpoints.
 PROMPT;
 	}
 

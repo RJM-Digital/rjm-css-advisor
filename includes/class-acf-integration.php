@@ -436,6 +436,14 @@ class RJM_CSS_Advisor_ACF_Integration {
 	// Field name/label keywords that suggest a visual styling control.
 	const STYLE_KEYWORD_PATTERN = '/color|colour|font|size|weight|hover|align|spacing|margin|padding|radius|shadow|border|background|\bbg\b|opacity|width|height|style|underline|italic|bold/i';
 
+	// Breakpoint thresholds shown alongside per-breakpoint native fields — must
+	// match the thresholds the AI is told to use in get_selected_media_headers().
+	const BREAKPOINT_LABELS = [
+		'mobile'  => 'Mobile (base)',
+		'tablet'  => 'Tablet (≥768px)',
+		'desktop' => 'Desktop (≥1200px)',
+	];
+
 	/**
 	 * Find ACF fields that look like native styling controls (colors, sizes,
 	 * hover toggles, etc.) relevant to the component being styled, so the AI
@@ -602,9 +610,12 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 	/**
 	 * Walk a flat list of ACF sub-fields, recursing into Group/Clone containers,
-	 * and append any style-related field found to $settings (capped at 80 total,
-	 * de-duplicated by label within this scope since the same setting often
-	 * repeats per breakpoint with an identical label).
+	 * and append any style-related field found to $settings (capped at 80 total).
+	 * De-duplicated by label + breakpoint within this scope, since the same
+	 * setting name/label often repeats once per breakpoint (mobile/tablet/
+	 * desktop) with a different threshold each field actually applies from —
+	 * losing that distinction would hide a Desktop-specific override behind an
+	 * identically-labelled Mobile one.
 	 *
 	 * @param array  $fields
 	 * @param string $exclude_name
@@ -639,14 +650,25 @@ class RJM_CSS_Advisor_ACF_Integration {
 				continue;
 			}
 
-			$label_key = strtolower( trim( (string) ( $sub_field['label'] ?? '' ) ) );
-			if ( '' === $label_key || isset( $seen_labels[ $label_key ] ) ) {
+			$label = trim( (string) ( $sub_field['label'] ?? '' ) );
+			if ( '' === $label ) {
 				continue;
 			}
-			$seen_labels[ $label_key ] = true;
+
+			$breakpoint = self::detect_breakpoint_from_name( (string) ( $sub_field['name'] ?? '' ) );
+			$dedup_key  = strtolower( $label ) . '|' . $breakpoint;
+			if ( isset( $seen_labels[ $dedup_key ] ) ) {
+				continue;
+			}
+			$seen_labels[ $dedup_key ] = true;
+
+			$display_label = $label;
+			if ( '' !== $breakpoint ) {
+				$display_label .= ' — ' . self::BREAKPOINT_LABELS[ $breakpoint ];
+			}
 
 			$settings[] = [
-				'label'   => sanitize_text_field( mb_substr( (string) ( $sub_field['label'] ?? '' ), 0, 80 ) ),
+				'label'   => sanitize_text_field( mb_substr( $display_label, 0, 80 ) ),
 				'name'    => sanitize_key( $sub_field['name'] ?? '' ),
 				'type'    => sanitize_key( $sub_field['type'] ?? '' ),
 				'choices' => self::extract_choices( $sub_field ),
@@ -654,6 +676,26 @@ class RJM_CSS_Advisor_ACF_Integration {
 			];
 		}
 	}
+
+	/**
+	 * Detect a mobile/tablet/desktop marker in an ACF field name, e.g.
+	 * "fs_h1_desktop_font_size" or "benefit_text_mobile_font_size".
+	 *
+	 * @param string $name
+	 * @return string  'mobile', 'tablet', 'desktop', or '' if none detected.
+	 */
+	private static function detect_breakpoint_from_name( $name ) {
+		$name = strtolower( (string) $name );
+
+		foreach ( [ 'mobile', 'tablet', 'desktop' ] as $breakpoint ) {
+			if ( preg_match( '/(^|_)' . $breakpoint . '(_|$)/', $name ) ) {
+				return $breakpoint;
+			}
+		}
+
+		return '';
+	}
+
 
 	/**
 	 * Heuristic check for whether an ACF sub-field looks like a styling control.

@@ -165,6 +165,36 @@ class RJM_CSS_Advisor_GitHub_Client {
 	}
 
 	/**
+	 * Produce a short label for a saved chat.
+	 *
+	 * @param string $user_message
+	 * @param string $assistant_reply
+	 * @return string|WP_Error
+	 */
+	public function generate_chat_title( $user_message, $assistant_reply = '' ) {
+		$token = RJM_CSS_Advisor_Settings::get_token();
+		if ( ! $token && 'openai' !== RJM_CSS_Advisor_Settings::get_ai_provider() ) {
+			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
+		}
+
+		$prompt = "User request:\n" . trim( (string) $user_message );
+		if ( trim( (string) $assistant_reply ) ) {
+			$prompt .= "\n\nAssistant reply:\n" . mb_substr( trim( (string) $assistant_reply ), 0, 600 );
+		}
+
+		$system = 'You name CSS styling chats. Reply with a title of at most six words describing the styling task. '
+			. 'Use plain text only: no quotes, no punctuation at the end, no markdown, no preamble.';
+
+		$title = $this->call_copilot_with_context( $token, 'Chat Title', $prompt, $system );
+
+		if ( is_wp_error( $title ) ) {
+			return $title;
+		}
+
+		return trim( (string) $title );
+	}
+
+	/**
 	 * Run a planner turn, invoking $on_delta with user-facing prose as it arrives.
 	 *
 	 * The trailing metadata sentinel is withheld from $on_delta but still parsed

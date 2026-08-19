@@ -37,6 +37,181 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		add_action( 'wp_ajax_rjm_plan_css_generate', [ __CLASS__, 'handle_plan_generate' ] );
 		add_action( 'wp_ajax_rjm_build_css_start', [ __CLASS__, 'handle_build_start' ] );
 		add_action( 'wp_ajax_rjm_build_css_step',  [ __CLASS__, 'handle_build_step' ] );
+		add_action( 'wp_ajax_rjm_css_chat_list',   [ __CLASS__, 'handle_chat_list' ] );
+		add_action( 'wp_ajax_rjm_css_chat_open',   [ __CLASS__, 'handle_chat_open' ] );
+		add_action( 'wp_ajax_rjm_css_chat_rename', [ __CLASS__, 'handle_chat_rename' ] );
+		add_action( 'wp_ajax_rjm_css_chat_delete', [ __CLASS__, 'handle_chat_delete' ] );
+		add_action( 'wp_ajax_rjm_css_chat_clear',  [ __CLASS__, 'handle_chat_clear' ] );
+	}
+
+	// -------------------------------------------------------------------------
+	// Handlers — persistent chat history
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Resolve the component scope for a chat-history request.
+	 *
+	 * @return string
+	 */
+	private static function chat_scope_from_request() {
+		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
+
+		if ( ! current_user_can( 'edit_posts' ) ) {
+			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
+		}
+
+		$layout    = sanitize_key( wp_unslash( $_POST['layout'] ?? '' ) );
+		$field     = sanitize_key( wp_unslash( $_POST['field'] ?? 'custom_css' ) );
+		$field_key = sanitize_text_field( wp_unslash( $_POST['field_key'] ?? '' ) );
+		$is_global = ( ( $_POST['is_global'] ?? '0' ) === '1' );
+		$is_global = self::normalize_is_global_request( $field, $field_key, $is_global );
+		$post_id   = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
+
+		return self::build_memory_scope( $post_id, $field, $field_key, $layout, $is_global );
+	}
+
+	/**
+	 * Return the saved chat index for this component.
+	 */
+	public static function handle_chat_list() {
+		$scope = self::chat_scope_from_request();
+
+		wp_send_json_success( [ 'chats' => RJM_CSS_Advisor_Chat_History::get_index( $scope ) ] );
+	}
+
+	/**
+	 * Load a saved chat and rehydrate it as the active plan session.
+	 */
+	public static function handle_chat_open() {
+		$scope   = self::chat_scope_from_request();
+		$chat_id = sanitize_text_field( wp_unslash( $_POST['chat_id'] ?? '' ) );
+
+		if ( ! $chat_id ) {
+			$chat_id = RJM_CSS_Advisor_Chat_History::latest_chat_id( $scope );
+		}
+
+		$chat = $chat_id ? RJM_CSS_Advisor_Chat_History::get_chat( $scope, $chat_id ) : null;
+
+		if ( ! $chat ) {
+			wp_send_json_success( [ 'chat' => null ] );
+		}
+
+		$session = self::get_plan_session( $chat['id'] );
+		if ( ! $session ) {
+			$session = [
+				'layout'      => (string) $chat['layout'],
+				'field'       => (string) $chat['field'],
+				'is_global'   => ! empty( $chat['is_global'] ),
+				'breakpoints' => (array) $chat['breakpoints'],
+				'messages'    => (array) $chat['messages'],
+				'brief'       => (string) $chat['brief'],
+				'existing_css_context' => (string) ( $chat['existing_css_context'] ?? '' ),
+			];
+			self::set_plan_session( $chat['id'], $session );
+		}
+
+		wp_send_json_success( [
+			'chat' => [
+				'id'                => (string) $chat['id'],
+				'title'             => (string) $chat['title'],
+				'brief'             => (string) $chat['brief'],
+				'breakpoints'       => (array) $chat['breakpoints'],
+				'ready_to_generate' => ! empty( $chat['ready_to_generate'] ),
+				'updated_at'        => (int) $chat['updated_at'],
+				'messages'          => self::chat_messages_for_client( $session['messages'] ),
+			],
+		] );
+	}
+
+	/**
+	 * Shape stored messages for client-side transcript rebuilding.
+	 *
+	 * @param array $messages
+	 * @return array
+	 */
+	private static function chat_messages_for_client( $messages ) {
+		$out = [];
+
+		foreach ( (array) $messages as $message ) {
+			$screenshots = self::get_message_screenshots( $message );
+			$content     = trim( (string) ( $message['content'] ?? '' ) );
+			$missing     = max( 0, (int) ( $message['screenshot_count'] ?? 0 ) - count( $screenshots ) );
+
+			if ( ! $content && ! $screenshots && ! $missing ) {
+				continue;
+			}
+
+			$out[] = [
+				'role'              => ( ( $message['role'] ?? '' ) === 'user' ) ? 'user' : 'assistant',
+				'content'           => $content,
+				'missing_screenshots' => $missing,
+				'screenshots'       => array_values( array_filter( array_map(
+					static function ( $screenshot ) {
+						return empty( $screenshot['data'] ) ? null : [ 'data' => (string) $screenshot['data'] ];
+					},
+					$screenshots
+				) ) ),
+			];
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Rename a saved chat.
+	 */
+	public static function handle_chat_rename() {
+		$scope   = self::chat_scope_from_request();
+		$chat_id = sanitize_text_field( wp_unslash( $_POST['chat_id'] ?? '' ) );
+		$title   = sanitize_text_field( wp_unslash( $_POST['title'] ?? '' ) );
+
+		if ( ! $chat_id || ! trim( $title ) ) {
+			wp_send_json_error( [ 'message' => __( 'Please enter a chat name.', 'rjm-css-advisor' ) ] );
+		}
+
+		$saved = RJM_CSS_Advisor_Chat_History::set_title( $scope, $chat_id, $title, 'manual' );
+
+		if ( ! $saved ) {
+			wp_send_json_error( [ 'message' => __( 'That chat could not be found.', 'rjm-css-advisor' ) ], 404 );
+		}
+
+		wp_send_json_success( [
+			'chat_id' => $chat_id,
+			'title'   => $saved,
+			'chats'   => RJM_CSS_Advisor_Chat_History::get_index( $scope ),
+		] );
+	}
+
+	/**
+	 * Delete a single saved chat.
+	 */
+	public static function handle_chat_delete() {
+		$scope   = self::chat_scope_from_request();
+		$chat_id = sanitize_text_field( wp_unslash( $_POST['chat_id'] ?? '' ) );
+
+		if ( ! $chat_id ) {
+			wp_send_json_error( [ 'message' => __( 'That chat could not be found.', 'rjm-css-advisor' ) ], 404 );
+		}
+
+		RJM_CSS_Advisor_Chat_History::delete_chat( $scope, $chat_id );
+		delete_transient( self::plan_session_key( $chat_id ) );
+
+		wp_send_json_success( [ 'chats' => RJM_CSS_Advisor_Chat_History::get_index( $scope ) ] );
+	}
+
+	/**
+	 * Delete every saved chat for this component.
+	 */
+	public static function handle_chat_clear() {
+		$scope = self::chat_scope_from_request();
+
+		foreach ( RJM_CSS_Advisor_Chat_History::get_index( $scope ) as $entry ) {
+			delete_transient( self::plan_session_key( (string) ( $entry['id'] ?? '' ) ) );
+		}
+
+		RJM_CSS_Advisor_Chat_History::clear_all( $scope );
+
+		wp_send_json_success( [ 'chats' => [] ] );
 	}
 
 	/**
@@ -189,13 +364,14 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		$session = self::get_plan_session( $session_id );
 		if ( ! $session ) {
+			$saved   = RJM_CSS_Advisor_Chat_History::get_chat( $scope, $session_id );
 			$session = [
 				'layout'      => $layout,
 				'field'       => $field,
 				'is_global'   => $is_global,
 				'breakpoints' => $breakpoints,
-				'messages'    => (array) ( $memory['chat_messages'] ?? [] ),
-				'brief'       => '',
+				'messages'    => (array) ( $saved['messages'] ?? [] ),
+				'brief'       => (string) ( $saved['brief'] ?? '' ),
 				'existing_css_context' => $existing_css_context,
 			];
 		}
@@ -259,6 +435,9 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		self::set_plan_session( $session_id, $session );
 
+		$chat = RJM_CSS_Advisor_Chat_History::record_turn( $scope, $session_id, $session, ! empty( $result['ready_to_generate'] ) );
+		$chat_title = self::maybe_generate_chat_title( $scope, $chat );
+
 		self::log_debug_success( 'plan_chat', [
 			'layout'            => $layout,
 			'field'             => $field,
@@ -276,6 +455,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			'messages'          => self::plan_messages_for_client( $session['messages'] ),
 			'ready_to_generate' => ! empty( $result['ready_to_generate'] ),
 			'brief'             => $session['brief'],
+			'chat_title'        => $chat_title,
 		] );
 	}
 
@@ -335,13 +515,14 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		$session = self::get_plan_session( $session_id );
 		if ( ! $session ) {
+			$saved   = RJM_CSS_Advisor_Chat_History::get_chat( $scope, $session_id );
 			$session = [
 				'layout'      => $layout,
 				'field'       => $field,
 				'is_global'   => $is_global,
 				'breakpoints' => $breakpoints,
-				'messages'    => (array) ( $memory['chat_messages'] ?? [] ),
-				'brief'       => '',
+				'messages'    => (array) ( $saved['messages'] ?? [] ),
+				'brief'       => (string) ( $saved['brief'] ?? '' ),
 				'existing_css_context' => $existing_css_context,
 			];
 		}
@@ -408,6 +589,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		self::set_plan_session( $session_id, $session );
 
+		$chat = RJM_CSS_Advisor_Chat_History::record_turn( $scope, $session_id, $session, ! empty( $result['ready_to_generate'] ) );
+
 		self::log_debug_success( 'plan_stream', [
 			'layout'            => $layout,
 			'field'             => $field,
@@ -424,9 +607,60 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			'message'           => $assistant_message,
 			'ready_to_generate' => ! empty( $result['ready_to_generate'] ),
 			'brief'             => (string) ( $session['brief'] ?? '' ),
+			'chat_title'        => (string) $chat['title'],
 		] );
 
+		// Titling costs an extra API round trip, so it trails the visible response.
+		$ai_title = self::maybe_generate_chat_title( $scope, $chat );
+		if ( $ai_title !== $chat['title'] ) {
+			self::sse_send( 'title', [
+				'session_id' => $session_id,
+				'chat_title' => $ai_title,
+			] );
+		}
+
 		exit;
+	}
+
+	/**
+	 * Upgrade a placeholder chat title to an AI-generated one, once per chat.
+	 *
+	 * @param string $scope
+	 * @param array  $chat
+	 * @return string The title to show.
+	 */
+	private static function maybe_generate_chat_title( $scope, $chat ) {
+		$current = (string) ( $chat['title'] ?? '' );
+
+		if ( 'fallback' !== ( $chat['title_source'] ?? '' ) || count( (array) $chat['messages'] ) < 2 ) {
+			return $current;
+		}
+
+		$first_user = '';
+		$last_reply = '';
+		foreach ( (array) $chat['messages'] as $message ) {
+			if ( ! $first_user && 'user' === ( $message['role'] ?? '' ) ) {
+				$first_user = (string) ( $message['content'] ?? '' );
+			}
+			if ( 'assistant' === ( $message['role'] ?? '' ) ) {
+				$last_reply = (string) ( $message['content'] ?? '' );
+			}
+		}
+
+		if ( ! $first_user ) {
+			return $current;
+		}
+
+		$client = new RJM_CSS_Advisor_GitHub_Client();
+		$title  = $client->generate_chat_title( $first_user, $last_reply );
+
+		if ( is_wp_error( $title ) || ! trim( (string) $title ) ) {
+			return $current;
+		}
+
+		$saved = RJM_CSS_Advisor_Chat_History::set_title( $scope, $chat['id'], $title, 'ai' );
+
+		return $saved ? $saved : $current;
 	}
 
 	/**
@@ -1114,7 +1348,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$role    = sanitize_key( $message['role'] ?? 'assistant' );
 			$content = trim( (string) ( $message['content'] ?? '' ) );
 			$screenshots = self::get_message_screenshots( $message );
-			if ( ! $content && ! $screenshots ) {
+			$missing_count = max( 0, (int) ( $message['screenshot_count'] ?? 0 ) - count( $screenshots ) );
+			if ( ! $content && ! $screenshots && ! $missing_count ) {
 				continue;
 			}
 
@@ -1128,6 +1363,15 @@ class RJM_CSS_Advisor_Ajax_Handler {
 					continue;
 				}
 				echo '<div class="rjm-plan-screenshot"><img loading="lazy" src="' . esc_attr( $screenshot['data'] ) . '" alt="' . esc_attr__( 'Attached screenshot', 'rjm-css-advisor' ) . '" /></div>';
+			}
+			if ( $missing_count ) {
+				echo '<p class="rjm-plan-screenshot-missing">' . esc_html(
+					sprintf(
+						/* translators: %d: number of screenshots. */
+						_n( '%d screenshot from this chat is no longer available.', '%d screenshots from this chat are no longer available.', $missing_count, 'rjm-css-advisor' ),
+						$missing_count
+					)
+				) . '</p>';
 			}
 			echo '</div>';
 		}

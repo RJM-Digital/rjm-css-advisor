@@ -124,6 +124,20 @@ class RJM_CSS_Advisor_ACF_Integration {
 						__( 'Add more padding below this section on mobile', 'rjm-css-advisor' ),
 						__( 'Centre the buttons and add a hover effect', 'rjm-css-advisor' ),
 					],
+					'historyEmpty'       => __( 'No saved chats for this component yet.', 'rjm-css-advisor' ),
+					'historyUntitled'    => __( 'Untitled chat', 'rjm-css-advisor' ),
+					'historyOpen'        => __( 'Open chat', 'rjm-css-advisor' ),
+					'historyRename'      => __( 'Rename', 'rjm-css-advisor' ),
+					'historyDelete'      => __( 'Delete', 'rjm-css-advisor' ),
+					'historyRenamePrompt' => __( 'Chat name:', 'rjm-css-advisor' ),
+					'historyDeleteConfirm' => __( 'Delete this chat? This cannot be undone.', 'rjm-css-advisor' ),
+					'historyClearConfirm' => __( 'Delete every saved chat for this component? This cannot be undone.', 'rjm-css-advisor' ),
+					'historyError'       => __( 'Chat history is unavailable right now.', 'rjm-css-advisor' ),
+					/* translators: %d: number of screenshots. */
+					'historyScreenshotMissing' => __( '%d screenshot(s) from this chat are no longer available.', 'rjm-css-advisor' ),
+					'historyJustNow'     => __( 'Just now', 'rjm-css-advisor' ),
+					/* translators: %s: human-readable time difference, e.g. "2 hours". */
+					'historyAgo'         => __( '%s ago', 'rjm-css-advisor' ),
 				],
 			]
 		);
@@ -185,6 +199,9 @@ class RJM_CSS_Advisor_ACF_Integration {
 							<span class="rjm-css-panel-context"><?php echo esc_html( $layout_name ? $layout_name : $field_name ); ?></span>
 						</div>
 						<div class="rjm-css-panel-header-actions">
+							<button type="button" class="rjm-css-icon-btn rjm-css-history-btn" title="<?php esc_attr_e( 'Chat history', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'Chat history', 'rjm-css-advisor' ); ?>" aria-pressed="false">
+								<span aria-hidden="true">☰</span>
+							</button>
 							<button type="button" class="rjm-css-icon-btn rjm-css-advisor-tryagain" title="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>">
 								<span aria-hidden="true">↻</span>
 							</button>
@@ -197,6 +214,23 @@ class RJM_CSS_Advisor_ACF_Integration {
 						</div>
 					</div>
 
+					<div class="rjm-css-panel-main">
+						<aside class="rjm-css-history-sidebar" aria-label="<?php esc_attr_e( 'Previous chats', 'rjm-css-advisor' ); ?>">
+							<div class="rjm-css-history-head">
+								<span class="rjm-css-history-heading"><?php esc_html_e( 'Chats', 'rjm-css-advisor' ); ?></span>
+								<button type="button" class="rjm-css-icon-btn rjm-css-history-new" title="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>" aria-label="<?php esc_attr_e( 'New chat', 'rjm-css-advisor' ); ?>">
+									<span aria-hidden="true">+</span>
+								</button>
+							</div>
+							<ul class="rjm-css-history-list"></ul>
+							<div class="rjm-css-history-foot">
+								<button type="button" class="button-link rjm-css-history-clear" hidden>
+									<?php esc_html_e( 'Clear all history', 'rjm-css-advisor' ); ?>
+								</button>
+							</div>
+						</aside>
+
+						<div class="rjm-css-panel-body">
 					<!-- Step 1: Goal entry form -->
 					<div class="rjm-css-goal-form">
 						<div class="rjm-css-goal-body">
@@ -322,6 +356,8 @@ class RJM_CSS_Advisor_ACF_Integration {
 							<button type="button" class="button rjm-css-advisor-tryagain">
 								<?php esc_html_e( '↻ Try again', 'rjm-css-advisor' ); ?>
 							</button>
+						</div>
+					</div>
 						</div>
 					</div>
 

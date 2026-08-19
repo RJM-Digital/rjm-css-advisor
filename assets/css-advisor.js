@@ -38,6 +38,12 @@
 		$(document).on('click',   '.rjm-css-screenshot-remove', onScreenshotRemoveClick);
 		$(document).on('click',   '.rjm-css-screenshot-clear', onScreenshotClearClick);
 		$(document).on('click',   '.rjm-css-fullscreen-btn',   onFullscreenClick);
+		$(document).on('click',   '.rjm-css-history-btn',     onHistoryToggleClick);
+		$(document).on('click',   '.rjm-css-history-new',     onHistoryNewClick);
+		$(document).on('click',   '.rjm-css-history-open',    onHistoryOpenClick);
+		$(document).on('click',   '.rjm-css-history-rename',  onHistoryRenameClick);
+		$(document).on('click',   '.rjm-css-history-delete',  onHistoryDeleteClick);
+		$(document).on('click',   '.rjm-css-history-clear',   onHistoryClearClick);
 		$(document).on('click',   '.rjm-css-example-chip',     onExampleChipClick);
 		$(document).on('click',   '.rjm-css-menu-btn',         onMenuButtonClick);
 		$(document).on('click',   '.rjm-css-menu-popover',     function (e) { e.stopPropagation(); });
@@ -493,7 +499,11 @@
 							finish();
 							updateModeUI($panel);
 							renderPlanReadyNote($panel, event.data.ready_to_generate);
-							return;
+							refreshHistory(getWrapFromPanel($panel), $panel);
+							continue;
+						} else if (event.name === 'title') {
+							syncHistoryTitle($panel, event.data.session_id || '', event.data.chat_title || '');
+							continue;
 						} else if (event.name === 'error') {
 							settled = true;
 							fail(event.data.message || 'Request failed');
@@ -595,6 +605,7 @@
 				updateModeUI($panel);
 				renderPlanReadyNote($panel, data.ready_to_generate);
 				scrollTranscript($panel);
+				refreshHistory(getWrapFromPanel($panel), $panel);
 			},
 			error: function (xhr) {
 				removeThinkingBubble($thinking);
@@ -755,6 +766,7 @@
 		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
 		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
 		updateModeUI($panel);
+		refreshHistory($wrap, $panel);
 		$panel.find('.rjm-css-goal-input').focus();
 	}
 
@@ -809,6 +821,7 @@
 		updateModeUI($panel);
 		$panel.find('.rjm-css-goal-input').focus();
 		autoGrowTextarea($panel.find('.rjm-css-goal-input')[0]);
+		openChat($wrap, $panel, '');
 	}
 
 	function getSelectedMode($panel) {
@@ -865,6 +878,257 @@
 	}
 
 	// -------------------------------------------------------------------------
+	// Chat history — per-component, persisted server-side
+	// -------------------------------------------------------------------------
+
+	function getWrapFromPanel($panel) {
+		return $panel.closest('.rjm-css-advisor-wrap');
+	}
+
+	function historyRequest($wrap, action, extra, onSuccess) {
+		var reqCtx = collectRequestContext($wrap);
+
+		return $.ajax({
+			url: normalizeAjaxUrl(),
+			type: 'POST',
+			data: $.extend({
+				action: action,
+				nonce: cfg.nonce,
+				layout: reqCtx.layoutName,
+				field: reqCtx.fieldName,
+				field_key: reqCtx.fieldKey,
+				post_id: reqCtx.postId,
+				is_global: reqCtx.isGlobal ? '1' : '0',
+			}, extra || {}),
+			success: function (response) {
+				if (response && response.success && onSuccess) {
+					onSuccess(response.data || {});
+				}
+			},
+		});
+	}
+
+	function refreshHistory($wrap, $panel) {
+		historyRequest($wrap, 'rjm_css_chat_list', {}, function (data) {
+			renderHistoryList($panel, data.chats || []);
+		});
+	}
+
+	function renderHistoryList($panel, chats) {
+		var $list = $panel.find('.rjm-css-history-list').empty();
+		var activeId = $panel.data('planSessionId') || '';
+
+		$panel.data('historyChats', chats);
+		$panel.find('.rjm-css-history-clear').attr('hidden', chats.length ? null : true);
+
+		if (!chats.length) {
+			$list.append($('<li class="rjm-css-history-empty"></li>').text(cfg.i18n.historyEmpty || 'No saved chats yet.'));
+			return;
+		}
+
+		chats.forEach(function (chat) {
+			var $item = $('<li class="rjm-css-history-item"></li>')
+				.attr('data-chat-id', chat.id)
+				.toggleClass('is-active', chat.id === activeId);
+
+			var $open = $('<button type="button" class="rjm-css-history-open"></button>')
+				.attr('title', chat.preview || '')
+				.append($('<span class="rjm-css-history-title"></span>').text(chat.title || cfg.i18n.historyUntitled || 'Untitled chat'))
+				.append($('<span class="rjm-css-history-meta"></span>').text(timeAgo(chat.updated_at)));
+
+			var $actions = $('<span class="rjm-css-history-row-actions"></span>')
+				.append(
+					$('<button type="button" class="rjm-css-icon-btn rjm-css-history-rename"></button>')
+						.attr({ title: cfg.i18n.historyRename || 'Rename', 'aria-label': cfg.i18n.historyRename || 'Rename' })
+						.append($('<span aria-hidden="true"></span>').text('✎'))
+				)
+				.append(
+					$('<button type="button" class="rjm-css-icon-btn rjm-css-history-delete"></button>')
+						.attr({ title: cfg.i18n.historyDelete || 'Delete', 'aria-label': cfg.i18n.historyDelete || 'Delete' })
+						.append($('<span aria-hidden="true"></span>').text('🗑'))
+				);
+
+			$list.append($item.append($open).append($actions));
+		});
+	}
+
+	/**
+	 * Reflect the newly saved title without a full history round trip.
+	 */
+	function syncHistoryTitle($panel, chatId, title) {
+		if (!chatId || !title) {
+			return;
+		}
+
+		var $item = $panel.find('.rjm-css-history-item[data-chat-id="' + chatId + '"]');
+		if ($item.length) {
+			$item.find('.rjm-css-history-title').text(title);
+			return;
+		}
+
+		refreshHistory(getWrapFromPanel($panel), $panel);
+	}
+
+	function onHistoryToggleClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var isOpen = !$panel.hasClass('is-history-open');
+
+		$panel.toggleClass('is-history-open', isOpen);
+		$(this).attr('aria-pressed', isOpen ? 'true' : 'false');
+
+		if (isOpen) {
+			refreshHistory(getWrapFromPanel($panel), $panel);
+		}
+	}
+
+	function onHistoryNewClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var $wrap = getWrapFromPanel($panel);
+
+		resetModeState($panel);
+		setResultsPriorityState($panel, false);
+		updateModeUI($panel);
+		$panel.find('.rjm-css-goal-input').focus();
+		refreshHistory($wrap, $panel);
+	}
+
+	function onHistoryOpenClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var chatId = $(this).closest('.rjm-css-history-item').attr('data-chat-id');
+
+		openChat(getWrapFromPanel($panel), $panel, chatId);
+	}
+
+	function onHistoryRenameClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var $item = $(this).closest('.rjm-css-history-item');
+		var chatId = $item.attr('data-chat-id');
+		var current = $item.find('.rjm-css-history-title').text();
+		var title = window.prompt(cfg.i18n.historyRenamePrompt || 'Chat name:', current);
+
+		if (title === null || !title.trim()) {
+			return;
+		}
+
+		historyRequest(getWrapFromPanel($panel), 'rjm_css_chat_rename', { chat_id: chatId, title: title.trim() }, function (data) {
+			renderHistoryList($panel, data.chats || []);
+		});
+	}
+
+	function onHistoryDeleteClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var chatId = $(this).closest('.rjm-css-history-item').attr('data-chat-id');
+
+		if (!window.confirm(cfg.i18n.historyDeleteConfirm || 'Delete this chat?')) {
+			return;
+		}
+
+		historyRequest(getWrapFromPanel($panel), 'rjm_css_chat_delete', { chat_id: chatId }, function (data) {
+			if (($panel.data('planSessionId') || '') === chatId) {
+				resetModeState($panel);
+				setResultsPriorityState($panel, false);
+				updateModeUI($panel);
+			}
+			renderHistoryList($panel, data.chats || []);
+		});
+	}
+
+	function onHistoryClearClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+
+		if (!window.confirm(cfg.i18n.historyClearConfirm || 'Delete every saved chat for this component?')) {
+			return;
+		}
+
+		historyRequest(getWrapFromPanel($panel), 'rjm_css_chat_clear', {}, function (data) {
+			resetModeState($panel);
+			setResultsPriorityState($panel, false);
+			updateModeUI($panel);
+			renderHistoryList($panel, data.chats || []);
+		});
+	}
+
+	/**
+	 * Load a saved chat into the panel so it can be continued.
+	 *
+	 * @param {string} chatId Empty string loads the most recent chat.
+	 */
+	function openChat($wrap, $panel, chatId) {
+		historyRequest($wrap, 'rjm_css_chat_open', { chat_id: chatId || '' }, function (data) {
+			var chat = data.chat;
+			if (!chat) {
+				refreshHistory($wrap, $panel);
+				return;
+			}
+
+			abortPlanStream($panel);
+			$panel.find('.rjm-css-advisor-content').html('');
+			$panel.data('planSessionId', chat.id);
+			$panel.data('planReady', Boolean(chat.ready_to_generate));
+			$panel.find('.rjm-css-mode-input[value="ask"]').prop('checked', true);
+			applyBreakpoints($panel, chat.breakpoints || []);
+
+			(chat.messages || []).forEach(function (message) {
+				var $bubble = appendMessageBubble($panel, message.role, message.content, message.screenshots || []);
+				if (message.missing_screenshots) {
+					$bubble.append(
+						$('<p class="rjm-plan-screenshot-missing"></p>').text(
+							(cfg.i18n.historyScreenshotMissing || '%d screenshot(s) from this chat are no longer available.')
+								.replace('%d', message.missing_screenshots)
+						)
+					);
+				}
+			});
+
+			setResultsPriorityState($panel, true);
+			updateModeUI($panel);
+			renderPlanReadyNote($panel, chat.ready_to_generate);
+			scrollTranscript($panel, true);
+			refreshHistory($wrap, $panel);
+		});
+	}
+
+	function applyBreakpoints($panel, breakpoints) {
+		$panel.find('.rjm-css-breakpoint-input').each(function () {
+			$(this).prop('checked', breakpoints.indexOf($(this).val()) !== -1);
+		});
+		updateBreakpointMenuLabel($panel);
+	}
+
+	function timeAgo(timestamp) {
+		var seconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(timestamp || 0));
+
+		if (seconds < 60) {
+			return cfg.i18n.historyJustNow || 'Just now';
+		}
+
+		var units = [
+			[31536000, 'year'],
+			[2592000, 'month'],
+			[604800, 'week'],
+			[86400, 'day'],
+			[3600, 'hour'],
+			[60, 'minute'],
+		];
+
+		for (var i = 0; i < units.length; i++) {
+			if (seconds >= units[i][0]) {
+				var value = Math.floor(seconds / units[i][0]);
+				var label = value + ' ' + units[i][1] + (value === 1 ? '' : 's');
+				return (cfg.i18n.historyAgo || '%s ago').replace('%s', label);
+			}
+		}
+
+		return cfg.i18n.historyJustNow || 'Just now';
+	}
+
+	// -------------------------------------------------------------------------
 	// Fullscreen
 	// -------------------------------------------------------------------------
 
@@ -891,6 +1155,12 @@
 		$panel.find('.rjm-css-fullscreen-btn')
 			.attr('aria-pressed', isFullscreen ? 'true' : 'false')
 			.find('span').text(isFullscreen ? '⤡' : '⤢');
+
+		// The sidebar has no room outside fullscreen.
+		if (!isFullscreen) {
+			$panel.removeClass('is-history-open');
+			$panel.find('.rjm-css-history-btn').attr('aria-pressed', 'false');
+		}
 
 		if ($panel.length) {
 			scrollTranscript($panel, true);

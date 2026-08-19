@@ -320,6 +320,7 @@
 				is_global: reqCtx.isGlobal ? '1' : '0',
 				goal:      goal,
 				breakpoints: breakpoints,
+				native_settings: reqCtx.nativeSettings,
 			},
 			success: function (response) {
 				$loading.attr('hidden', true);
@@ -367,6 +368,7 @@
 			screenshot_name: screenshots.map(function (screenshot) { return screenshot.name; }),
 			session_id: $panel.data('planSessionId') || '',
 			breakpoints: breakpoints,
+			native_settings: reqCtx.nativeSettings,
 		};
 
 		if (!canStream()) {
@@ -638,6 +640,7 @@
 				post_id: reqCtx.postId,
 				current_css: reqCtx.currentCss,
 				goal: goalTail,
+				native_settings: reqCtx.nativeSettings,
 			},
 			success: function (response) {
 				clearLoadingState($panel);
@@ -680,6 +683,7 @@
 				is_global: reqCtx.isGlobal ? '1' : '0',
 				goal: goal,
 				breakpoints: breakpoints,
+				native_settings: reqCtx.nativeSettings,
 			},
 			success: function (response) {
 				clearLoadingState($panel);
@@ -723,6 +727,7 @@
 				current_css: reqCtx.currentCss,
 				decision: decision,
 				feedback: feedback,
+				native_settings: reqCtx.nativeSettings,
 			},
 			success: function (response) {
 				clearLoadingState($panel);
@@ -1177,6 +1182,7 @@
 			isGlobal: $wrap.data('global') === 1 || $wrap.data('global') === '1',
 			postId: Number(cfg.postId || 0),
 			currentCss: $textarea.length ? String($textarea.val() || '') : '',
+			nativeSettings: String($wrap.attr('data-native-settings') || ''),
 		};
 	}
 

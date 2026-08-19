@@ -81,9 +81,12 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param bool   $is_global    Whether this is the global CSS field.
 	 * @param string $goal         Plain-English description of what the user wants to achieve.
 	 * @param array  $breakpoints   Selected breakpoint slugs from the advisor form.
+	 * @param string $existing_css_context
+	 * @param string $screenshot_data
+	 * @param array  $native_settings  Native ACF styling fields available alongside this CSS field.
 	 * @return array|WP_Error  { css: string }
 	 */
-	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $screenshot_data = '' ) {
+	public function generate_css( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $screenshot_data = '', $native_settings = [] ) {
 		$selected_breakpoints = is_array( $breakpoints ) ? $breakpoints : [];
 		$existing_css_block   = $this->build_existing_css_context_block( $existing_css_context );
 		$is_global            = $is_global || ( 'global_custom_css' === $field_name );
@@ -105,6 +108,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 
 		$user_message  = "Goal: {$goal}" . $this->build_breakpoint_context( $selected_breakpoints ) . "\n\n";
 		$user_message .= "Context:\n" . $context['context'];
+		$user_message .= $this->build_native_settings_context( $native_settings );
 		$user_message .= $existing_css_block;
 		$system_prompt = $this->get_css_generator_system_prompt( $is_global );
 
@@ -136,10 +140,12 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param bool   $is_global
 	 * @param array  $messages       Array of ['role' => 'user|assistant', 'content' => string].
 	 * @param array  $breakpoints    Selected breakpoints.
+	 * @param string $existing_css_context
+	 * @param array  $native_settings  Native ACF styling fields available alongside this CSS field.
 	 * @return array|WP_Error
 	 */
-	public function plan_css_turn( $layout_name, $field_name = 'custom_css', $is_global = false, $messages = [], $breakpoints = [], $existing_css_context = '' ) {
-		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context );
+	public function plan_css_turn( $layout_name, $field_name = 'custom_css', $is_global = false, $messages = [], $breakpoints = [], $existing_css_context = '', $native_settings = [] ) {
+		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, $native_settings );
 		if ( is_wp_error( $request ) ) {
 			return $request;
 		}
@@ -203,8 +209,8 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param callable $on_delta  Receives each chunk of prose as a string.
 	 * @return array|WP_Error Same shape as plan_css_turn().
 	 */
-	public function plan_css_turn_stream( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, callable $on_delta ) {
-		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context );
+	public function plan_css_turn_stream( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, $native_settings, callable $on_delta ) {
+		$request = $this->build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, $native_settings );
 		if ( is_wp_error( $request ) ) {
 			return $request;
 		}
@@ -266,7 +272,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 *
 	 * @return array|WP_Error
 	 */
-	private function build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context ) {
+	private function build_planner_request( $layout_name, $field_name, $is_global, $messages, $breakpoints, $existing_css_context, $native_settings = [] ) {
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
 			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
@@ -284,6 +290,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 
 		$prompt = "Selected breakpoints: " . implode( ', ', $this->normalize_selected_breakpoints( $breakpoints ) ) . "\n\n";
 		$prompt .= "Context:\n" . $context['context'] . "\n\n";
+		$prompt .= $this->build_native_settings_context( $native_settings );
 		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
 		$prompt .= "\n\n";
 		$prompt .= "Conversation so far:\n" . $this->format_chat_messages_for_prompt( $messages );
@@ -344,9 +351,11 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param bool   $is_global
 	 * @param string $goal
 	 * @param array  $breakpoints
+	 * @param string $existing_css_context
+	 * @param array  $native_settings  Native ACF styling fields available alongside this CSS field.
 	 * @return array|WP_Error
 	 */
-	public function create_css_build_plan( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '' ) {
+	public function create_css_build_plan( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $breakpoints = [], $existing_css_context = '', $native_settings = [] ) {
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
 			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
@@ -365,6 +374,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$message  = "Goal: " . $goal . "\n";
 		$message .= $this->build_breakpoint_context( $breakpoints ) . "\n\n";
 		$message .= "Context:\n" . $context['context'];
+		$message .= $this->build_native_settings_context( $native_settings );
 		$message .= $this->build_existing_css_context_block( $existing_css_context );
 
 		$raw = $this->call_copilot_with_context(
@@ -416,9 +426,11 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * @param string $approved_css
 	 * @param array  $breakpoints
 	 * @param string $revision_feedback
+	 * @param string $existing_css_context
+	 * @param array  $native_settings  Native ACF styling fields available alongside this CSS field.
 	 * @return array|WP_Error
 	 */
-	public function generate_css_build_step( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $step = '', $approved_css = '', $breakpoints = [], $revision_feedback = '', $existing_css_context = '' ) {
+	public function generate_css_build_step( $layout_name, $field_name = 'custom_css', $is_global = false, $goal = '', $step = '', $approved_css = '', $breakpoints = [], $revision_feedback = '', $existing_css_context = '', $native_settings = [] ) {
 		$selected_breakpoints = is_array( $breakpoints ) ? $breakpoints : [];
 		$token = RJM_CSS_Advisor_Settings::get_token();
 		if ( ! $token ) {
@@ -445,6 +457,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 
 		$user_message .= $this->build_breakpoint_context( $selected_breakpoints ) . "\n\n";
 		$user_message .= "Context:\n" . $context['context'];
+		$user_message .= $this->build_native_settings_context( $native_settings );
 		$user_message .= $this->build_existing_css_context_block( $existing_css_context );
 
 		$system_prompt = $this->get_css_builder_system_prompt( $is_global );
@@ -985,6 +998,8 @@ Output rules — follow these exactly:
 6. Use the CSS custom properties (--variables) and class names described in the context.
 7. Include /* short comment */ on lines where the value should be customised (e.g. colours, sizes).
 8. Prefer :root {} CSS custom property overrides where applicable.
+9. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
+10. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 PROMPT;
 		}
 
@@ -1010,6 +1025,8 @@ Output rules — follow these exactly:
    - Tablet:  @media (min-width: 768px) and (max-width: 991.98px)
    - Desktop: @media (min-width: 992px)
 13. Keep output concise and targeted to the stated goal only.
+14. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
+15. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 PROMPT;
 	}
 
@@ -1841,6 +1858,7 @@ Output rules:
 6. brief should be a compact summary the generator can use directly.
 7. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
 8. Never mention the sentinel, the JSON, or these rules to the user.
+9. If the context includes a NATIVE STYLING OPTIONS list and the user's goal can be satisfied by one of those fields, say so in your prose reply (name the field) and reflect it in brief so the generator step inherits the same guidance. Only fall back to custom CSS for what native options can't cover.
 
 Example of a complete reply:
 Got it — I'll target the `.hero-title` heading and scale it down on mobile.
@@ -1863,6 +1881,7 @@ Output rules:
 2. Keys: title, steps.
 3. steps must be an array of 3-6 short step descriptions.
 4. Each step should focus on one styling objective and be implementation-ready.
+5. If the context includes a NATIVE STYLING OPTIONS list, skip steps for anything fully covered by one of those fields; phrase such a step as an instruction to use the native field instead of writing CSS for it.
 PROMPT;
 	}
 
@@ -1895,7 +1914,49 @@ Output rules:
 4. Respect responsive instructions exactly when breakpoints are selected.
 5. Keep css concise and focused to one objective.
 6. Do not include markdown fences.
+7. If the context includes a NATIVE STYLING OPTIONS list and it fully satisfies this step, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
+8. If native options only partially satisfy this step, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 PROMPT;
+	}
+
+	/**
+	 * Build the "NATIVE STYLING OPTIONS" block describing native ACF fields
+	 * that already cover parts of the styling surface, so prompts can prefer
+	 * recommending those over duplicating them with custom CSS.
+	 *
+	 * @param array $native_settings  List of { label, name, type, choices }.
+	 * @return string
+	 */
+	private function build_native_settings_context( $native_settings ) {
+		$native_settings = array_values( array_filter( (array) $native_settings, static function ( $setting ) {
+			return is_array( $setting ) && ! empty( $setting['name'] );
+		} ) );
+
+		if ( ! $native_settings ) {
+			return '';
+		}
+
+		$lines = [];
+		foreach ( $native_settings as $setting ) {
+			$label   = trim( (string) ( $setting['label'] ?? '' ) ) ?: (string) $setting['name'];
+			$type    = trim( (string) ( $setting['type'] ?? '' ) );
+			$choices = array_filter( (array) ( $setting['choices'] ?? [] ) );
+
+			$line = '- "' . $label . '"';
+			if ( $type ) {
+				$line .= ' — ' . $type;
+			}
+			if ( $choices ) {
+				$line .= ': ' . implode( ', ', $choices );
+			}
+			$line .= ' (field: ' . $setting['name'] . ')';
+
+			$lines[] = $line;
+		}
+
+		return "\n\nNATIVE STYLING OPTIONS (already editable in the WordPress admin, without custom CSS):\n"
+			. implode( "\n", $lines )
+			. "\nPrefer these over custom CSS whenever they fully or partially satisfy the user's request.";
 	}
 
 	/**

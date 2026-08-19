@@ -155,10 +155,11 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 * @param array $field  ACF field definition.
 	 */
 	public static function render_advice_button( $field ) {
-		$layout_name = self::detect_layout_name( $field );
-		$field_name  = $field['_name'] ?? $field['name'] ?? 'custom_css';
-		$field_key   = $field['key'] ?? '';
-		$is_global   = ( $field_name === 'global_custom_css' );
+		$layout_name     = self::detect_layout_name( $field );
+		$field_name      = $field['_name'] ?? $field['name'] ?? 'custom_css';
+		$field_key       = $field['key'] ?? '';
+		$is_global       = ( $field_name === 'global_custom_css' );
+		$native_settings = self::detect_native_settings( $field, $field_name );
 
 		$panel_id = 'rjm-advice-' . wp_generate_uuid4();
 		$goal_id  = 'rjm-goal-'   . wp_generate_uuid4();
@@ -175,6 +176,9 @@ class RJM_CSS_Advisor_ACF_Integration {
 			data-field-key="<?php echo esc_attr( $field_key ); ?>"
 			data-global="<?php echo $is_global ? '1' : '0'; ?>"
 			data-panel="<?php echo esc_attr( $panel_id ); ?>"
+			<?php if ( $native_settings ) : ?>
+			data-native-settings="<?php echo esc_attr( wp_json_encode( $native_settings ) ); ?>"
+			<?php endif; ?>
 		>
 			<button
 				type="button"
@@ -407,5 +411,124 @@ class RJM_CSS_Advisor_ACF_Integration {
 		// The JS detectLayoutName() will resolve the layout from the DOM at
 		// click time, so returning '' here is safe.
 		return '';
+	}
+
+	// -------------------------------------------------------------------------
+	// Native settings detection
+	// -------------------------------------------------------------------------
+
+	// ACF field types never considered a styling control.
+	const STRUCTURAL_FIELD_TYPES = [
+		'tab', 'message', 'accordion', 'clone', 'group', 'repeater', 'flexible_content',
+		'gallery', 'relationship', 'post_object', 'taxonomy', 'user', 'image', 'file',
+	];
+
+	// ACF field types that are always treated as a styling control when present.
+	const ALWAYS_STYLE_FIELD_TYPES = [ 'color_picker', 'range' ];
+
+	// ACF field types only treated as styling controls when their name/label matches a style keyword.
+	const KEYWORD_STYLE_FIELD_TYPES = [ 'select', 'radio', 'button_group', 'true_false', 'text', 'number' ];
+
+	// Field name/label keywords that suggest a visual styling control.
+	const STYLE_KEYWORD_PATTERN = '/color|colour|font|size|weight|hover|align|spacing|margin|padding|radius|shadow|border|background|\bbg\b|opacity|width|height|style|underline|italic|bold/i';
+
+	/**
+	 * Find sibling ACF fields on the same layout/field group that look like
+	 * native styling controls (colors, sizes, hover toggles, etc.), so the AI
+	 * can recommend those instead of duplicating them with custom CSS.
+	 *
+	 * @param array  $field       ACF field definition for the CSS field itself.
+	 * @param string $field_name  Resolved name of the CSS field.
+	 * @return array  List of { label, name, type, choices }.
+	 */
+	private static function detect_native_settings( $field, $field_name ) {
+		$sub_fields = [];
+
+		if ( 'global_custom_css' === $field_name ) {
+			if ( function_exists( 'acf_get_field_group' ) && function_exists( 'acf_get_fields' ) && ! empty( $field['parent'] ) ) {
+				$group = acf_get_field_group( $field['parent'] );
+				if ( $group ) {
+					$sub_fields = acf_get_fields( $group ) ?: [];
+				}
+			}
+		} elseif ( function_exists( 'acf_get_loop' ) ) {
+			$loop = acf_get_loop( 'active' );
+			if ( $loop && ! empty( $loop['layout']['sub_fields'] ) ) {
+				$sub_fields = $loop['layout']['sub_fields'];
+			}
+		}
+
+		$settings = [];
+		foreach ( (array) $sub_fields as $sub_field ) {
+			if ( ! is_array( $sub_field ) || ! self::is_style_related_field( $sub_field, $field_name ) ) {
+				continue;
+			}
+
+			$settings[] = [
+				'label'   => sanitize_text_field( mb_substr( (string) ( $sub_field['label'] ?? '' ), 0, 80 ) ),
+				'name'    => sanitize_key( $sub_field['name'] ?? '' ),
+				'type'    => sanitize_key( $sub_field['type'] ?? '' ),
+				'choices' => self::extract_choices( $sub_field ),
+			];
+
+			if ( count( $settings ) >= 20 ) {
+				break;
+			}
+		}
+
+		return $settings;
+	}
+
+	/**
+	 * Heuristic check for whether an ACF sub-field looks like a styling control.
+	 *
+	 * @param array  $sub_field
+	 * @param string $exclude_name  Name of the CSS field to skip.
+	 * @return bool
+	 */
+	private static function is_style_related_field( $sub_field, $exclude_name ) {
+		$name = strtolower( (string) ( $sub_field['name'] ?? '' ) );
+		$type = (string) ( $sub_field['type'] ?? '' );
+
+		if ( '' === $name || $name === strtolower( $exclude_name ) ) {
+			return false;
+		}
+
+		if ( in_array( $type, self::STRUCTURAL_FIELD_TYPES, true ) ) {
+			return false;
+		}
+
+		if ( in_array( $type, self::ALWAYS_STYLE_FIELD_TYPES, true ) ) {
+			return true;
+		}
+
+		if ( in_array( $type, self::KEYWORD_STYLE_FIELD_TYPES, true ) ) {
+			$label = (string) ( $sub_field['label'] ?? '' );
+			return (bool) preg_match( self::STYLE_KEYWORD_PATTERN, $name . ' ' . $label );
+		}
+
+		return false;
+	}
+
+	/**
+	 * Extract up to 10 sanitized choice labels from a select/radio/button_group field.
+	 *
+	 * @param array $sub_field
+	 * @return array<int,string>
+	 */
+	private static function extract_choices( $sub_field ) {
+		$choices = $sub_field['choices'] ?? null;
+		if ( ! is_array( $choices ) ) {
+			return [];
+		}
+
+		$labels = array_map(
+			static function ( $label ) {
+				return sanitize_text_field( mb_substr( (string) $label, 0, 40 ) );
+			},
+			array_values( $choices )
+		);
+
+		return array_slice( array_filter( $labels ), 0, 10 );
 	}
 }

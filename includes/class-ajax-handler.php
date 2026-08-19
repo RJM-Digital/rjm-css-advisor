@@ -265,6 +265,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$post_id   = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
 		$current_css = self::sanitize_css_payload( wp_unslash( $_POST['current_css'] ?? '' ) );
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
+		$native_settings = self::sanitize_native_settings_payload( wp_unslash( $_POST['native_settings'] ?? '' ) );
 
 		self::log_debug_request( 'generate', [
 			'layout'     => $layout,
@@ -283,7 +284,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$existing_css_context = self::resolve_existing_css_context( $current_css, $memory );
 
 		$client = new RJM_CSS_Advisor_GitHub_Client();
-		$result = $client->generate_css( $layout, $field, $is_global, $goal, $breakpoints, $existing_css_context );
+		$result = $client->generate_css( $layout, $field, $is_global, $goal, $breakpoints, $existing_css_context, '', $native_settings );
 
 		if ( is_wp_error( $result ) ) {
 			self::log_debug_error( 'generate', $result, [
@@ -337,6 +338,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
 		$post_id     = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
 		$current_css = self::sanitize_css_payload( wp_unslash( $_POST['current_css'] ?? '' ) );
+		$native_settings = self::sanitize_native_settings_payload( wp_unslash( $_POST['native_settings'] ?? '' ) );
 
 		self::log_debug_request( 'plan_chat', [
 			'layout'     => $layout,
@@ -380,6 +382,10 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$session['existing_css_context'] = $existing_css_context;
 		}
 
+		if ( $native_settings ) {
+			$session['native_settings'] = $native_settings;
+		}
+
 		$session_screenshot_bytes = self::get_screenshot_bytes( $session['messages'] );
 		$new_screenshot_bytes = self::get_screenshot_bytes( $screenshots );
 		if ( $session_screenshot_bytes + $new_screenshot_bytes > self::MAX_SCREENSHOT_SESSION_BYTES ) {
@@ -402,7 +408,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			! empty( $session['is_global'] ),
 			$session['messages'],
 			$session['breakpoints'],
-			(string) ( $session['existing_css_context'] ?? '' )
+			(string) ( $session['existing_css_context'] ?? '' ),
+			(array) ( $session['native_settings'] ?? [] )
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -482,6 +489,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) $request->get_param( 'breakpoints' ) ) ) );
 		$post_id     = absint( $request->get_param( 'post_id' ) );
 		$current_css = self::sanitize_css_payload( $request->get_param( 'current_css' ) );
+		$native_settings = self::sanitize_native_settings_payload( (string) $request->get_param( 'native_settings' ) );
 		$screenshots = self::validate_screenshot_payloads(
 			$request->get_param( 'screenshot_data' ) ?? [],
 			$request->get_param( 'screenshot_name' ) ?? []
@@ -531,6 +539,10 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$session['existing_css_context'] = $existing_css_context;
 		}
 
+		if ( $native_settings ) {
+			$session['native_settings'] = $native_settings;
+		}
+
 		if ( self::get_screenshot_bytes( $session['messages'] ) + self::get_screenshot_bytes( $screenshots ) > self::MAX_SCREENSHOT_SESSION_BYTES ) {
 			self::sse_fail( __( 'This plan session has reached its 50 MB screenshot limit. Remove some screenshots or start a new plan.', 'rjm-css-advisor' ) );
 		}
@@ -554,6 +566,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$session['messages'],
 			$session['breakpoints'],
 			(string) ( $session['existing_css_context'] ?? '' ),
+			(array) ( $session['native_settings'] ?? [] ),
 			static function ( $chunk ) {
 				self::sse_send( 'delta', [ 'text' => $chunk ] );
 			}
@@ -798,7 +811,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$goal,
 			$session['breakpoints'],
 			$existing_css_context,
-			$screenshot_data
+			$screenshot_data,
+			(array) ( $session['native_settings'] ?? [] )
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -853,6 +867,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
 		$post_id     = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
 		$current_css = self::sanitize_css_payload( wp_unslash( $_POST['current_css'] ?? '' ) );
+		$native_settings = self::sanitize_native_settings_payload( wp_unslash( $_POST['native_settings'] ?? '' ) );
 
 		self::log_debug_request( 'build_start', [
 			'layout'     => $layout,
@@ -871,7 +886,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$existing_css_context = self::resolve_existing_css_context( $current_css, $memory );
 
 		$client = new RJM_CSS_Advisor_GitHub_Client();
-		$plan   = $client->create_css_build_plan( $layout, $field, $is_global, $goal, $breakpoints, $existing_css_context );
+		$plan   = $client->create_css_build_plan( $layout, $field, $is_global, $goal, $breakpoints, $existing_css_context, $native_settings );
 		if ( is_wp_error( $plan ) ) {
 			self::log_debug_error( 'build_start', $plan, [
 				'layout'    => $layout,
@@ -899,6 +914,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			'current_step_css'  => '',
 			'approved_snippets' => [],
 			'existing_css_context' => $existing_css_context,
+			'native_settings'   => $native_settings,
 		];
 
 		$first = $client->generate_css_build_step(
@@ -910,7 +926,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			'',
 			$breakpoints,
 			'',
-			$existing_css_context
+			$existing_css_context,
+			$native_settings
 		);
 
 		if ( is_wp_error( $first ) ) {
@@ -1047,7 +1064,8 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			$approved_css,
 			$session['breakpoints'],
 			$decision === 'revise' ? $feedback : '',
-			$existing_css_context
+			$existing_css_context,
+			(array) ( $session['native_settings'] ?? [] )
 		);
 
 		if ( is_wp_error( $next ) ) {
@@ -1548,6 +1566,58 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$css = (string) $css;
 		$css = str_replace( [ "\r\n", "\r" ], "\n", $css );
 		return trim( $css );
+	}
+
+	/**
+	 * Validate and normalize the native ACF styling settings payload.
+	 *
+	 * Defensive against a tampered browser payload: whitelists keys/types and
+	 * caps array/string sizes before this ever reaches the AI prompt.
+	 *
+	 * @param string $raw_json  JSON string from the data-native-settings attribute.
+	 * @return array<int,array{label:string,name:string,type:string,choices:array<int,string>}>
+	 */
+	private static function sanitize_native_settings_payload( $raw_json ) {
+		$raw_json = trim( (string) $raw_json );
+		if ( ! $raw_json ) {
+			return [];
+		}
+
+		$decoded = json_decode( $raw_json, true, 4 );
+		if ( ! is_array( $decoded ) ) {
+			return [];
+		}
+
+		$settings = [];
+		foreach ( array_slice( $decoded, 0, 20 ) as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			$name = sanitize_key( (string) ( $entry['name'] ?? '' ) );
+			if ( ! $name ) {
+				continue;
+			}
+
+			$choices = [];
+			if ( ! empty( $entry['choices'] ) && is_array( $entry['choices'] ) ) {
+				foreach ( array_slice( $entry['choices'], 0, 10 ) as $choice ) {
+					$choice = sanitize_text_field( mb_substr( (string) $choice, 0, 40 ) );
+					if ( $choice ) {
+						$choices[] = $choice;
+					}
+				}
+			}
+
+			$settings[] = [
+				'label'   => sanitize_text_field( mb_substr( (string) ( $entry['label'] ?? '' ), 0, 80 ) ),
+				'name'    => $name,
+				'type'    => sanitize_key( (string) ( $entry['type'] ?? '' ) ),
+				'choices' => $choices,
+			];
+		}
+
+		return $settings;
 	}
 
 	/**

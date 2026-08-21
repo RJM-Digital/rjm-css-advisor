@@ -152,6 +152,14 @@ class RJM_CSS_Advisor_Settings {
 			self::PAGE_SLUG,
 			'rjm_css_advisor_debugging'
 		);
+
+		add_settings_field(
+			'disable_css_edit_access',
+			__( 'Disable Custom CSS Edit Access', 'rjm-css-advisor' ),
+			[ __CLASS__, 'render_field_disable_css_edit_access' ],
+			self::PAGE_SLUG,
+			'rjm_css_advisor_debugging'
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -201,6 +209,7 @@ class RJM_CSS_Advisor_Settings {
 		$clean['copilot_model'] = sanitize_text_field( $input['copilot_model'] ?? 'gpt-4o' );
 		$clean['cache_ttl']     = max( 1, intval( $input['cache_ttl'] ?? 60 ) );
 		$clean['debug_logging_enabled'] = ! empty( $input['debug_logging_enabled'] ) ? '1' : '0';
+		$clean['disable_css_edit_access'] = ! empty( $input['disable_css_edit_access'] ) ? '1' : '0';
 
 		// Sanitize cors_origins: one URL per line, strip blank lines.
 		$raw_origins = isset( $input['cors_origins'] ) ? (string) $input['cors_origins'] : '';
@@ -532,6 +541,23 @@ class RJM_CSS_Advisor_Settings {
 		<?php
 	}
 
+	public static function render_field_disable_css_edit_access() {
+		$settings = self::get_settings();
+		$enabled  = ! empty( $settings['disable_css_edit_access'] );
+		?>
+		<label>
+			<input
+				type="checkbox"
+				name="<?php echo esc_attr( self::OPTION_KEY ); ?>[disable_css_edit_access]"
+				value="1"
+				<?php checked( $enabled ); ?>
+			/>
+			<?php esc_html_e( 'Disable Custom CSS field edits and CSS generation for non-admin users.', 'rjm-css-advisor' ); ?>
+		</label>
+		<p class="description"><?php esc_html_e( 'Admins can still edit and generate CSS while this lock is enabled.', 'rjm-css-advisor' ); ?></p>
+		<?php
+	}
+
 	// -------------------------------------------------------------------------
 	// Connection status
 	// -------------------------------------------------------------------------
@@ -693,6 +719,19 @@ class RJM_CSS_Advisor_Settings {
 	public static function is_debug_enabled() {
 		$settings = self::get_settings();
 		return ! empty( $settings['debug_logging_enabled'] );
+	}
+
+	public static function is_css_edit_access_disabled() {
+		$settings = self::get_settings();
+		return ! empty( $settings['disable_css_edit_access'] );
+	}
+
+	public static function is_css_edit_lock_active_for_current_user() {
+		if ( ! self::is_css_edit_access_disabled() ) {
+			return false;
+		}
+
+		return ! current_user_can( 'manage_options' );
 	}
 
 	public static function add_debug_entry( $source, $action, $result, $details = [] ) {

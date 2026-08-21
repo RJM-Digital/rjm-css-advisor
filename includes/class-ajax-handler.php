@@ -230,10 +230,37 @@ class RJM_CSS_Advisor_Ajax_Handler {
 				'methods'             => 'POST',
 				'callback'            => [ __CLASS__, 'handle_plan_stream' ],
 				'permission_callback' => static function () {
-					return current_user_can( 'edit_posts' );
+					if ( ! current_user_can( 'edit_posts' ) ) {
+						return false;
+					}
+
+					if ( RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user() ) {
+						return new WP_Error(
+							'rjm_css_edit_access_disabled',
+							__( 'Custom CSS edit access is disabled for your account.', 'rjm-css-advisor' ),
+							[ 'status' => 403 ]
+						);
+					}
+
+					return true;
 				},
 			]
 		);
+	}
+
+	/**
+	 * Enforce capability and role-aware CSS edit lock for generation endpoints.
+	 *
+	 * @return void
+	 */
+	private static function enforce_generation_access() {
+		if ( ! current_user_can( 'edit_posts' ) ) {
+			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
+		}
+
+		if ( RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user() ) {
+			wp_send_json_error( [ 'message' => __( 'Custom CSS edit access is disabled for your account.', 'rjm-css-advisor' ) ], 403 );
+		}
 	}
 
 	// -------------------------------------------------------------------------
@@ -252,10 +279,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 */
 	public static function handle_generate() {
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$layout    = sanitize_key( wp_unslash( $_POST['layout']    ?? '' ) );
 		$field     = sanitize_key( wp_unslash( $_POST['field']     ?? 'custom_css' ) );
@@ -322,10 +346,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 */
 	public static function handle_plan_chat() {
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$layout      = sanitize_key( wp_unslash( $_POST['layout'] ?? '' ) );
 		$field       = sanitize_key( wp_unslash( $_POST['field'] ?? 'custom_css' ) );
@@ -760,10 +781,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 */
 	public static function handle_plan_generate() {
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$session_id = sanitize_text_field( wp_unslash( $_POST['session_id'] ?? '' ) );
 		$goal_tail  = sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) );
@@ -857,10 +875,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 */
 	public static function handle_build_start() {
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$layout      = sanitize_key( wp_unslash( $_POST['layout'] ?? '' ) );
 		$field       = sanitize_key( wp_unslash( $_POST['field'] ?? 'custom_css' ) );
@@ -975,10 +990,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 */
 	public static function handle_build_step() {
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$session_id = sanitize_text_field( wp_unslash( $_POST['session_id'] ?? '' ) );
 		$decision   = sanitize_key( wp_unslash( $_POST['decision'] ?? '' ) );
@@ -1116,10 +1128,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	public static function handle() {
 		// Security.
 		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'rjm-css-advisor' ) ], 403 );
-		}
+		self::enforce_generation_access();
 
 		$layout    = sanitize_key( wp_unslash( $_POST['layout']    ?? '' ) );
 		$field     = sanitize_key( wp_unslash( $_POST['field']     ?? 'custom_css' ) );

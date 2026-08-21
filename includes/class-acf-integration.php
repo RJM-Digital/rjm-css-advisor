@@ -45,6 +45,11 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 		// Inject the advice button after each CSS field is rendered.
 		foreach ( self::CSS_FIELD_NAMES as $field_name ) {
+			add_filter(
+				'acf/prepare_field/name=' . $field_name,
+				[ __CLASS__, 'maybe_lock_css_field' ]
+			);
+
 			add_action(
 				'acf/render_field/name=' . $field_name,
 				[ __CLASS__, 'render_advice_button' ]
@@ -81,6 +86,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 				'streamUrl' => rest_url( RJM_CSS_Advisor_Ajax_Handler::REST_NAMESPACE . '/plan-stream' ),
 				'restNonce' => wp_create_nonce( 'wp_rest' ),
 				'postId'    => (int) get_the_ID(),
+				'locked'    => RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user() ? 1 : 0,
 				'i18n'    => [
 					'buttonLabel'     => __( 'Generate Custom CSS ✨', 'rjm-css-advisor' ),
 					'goalLabel'       => __( 'Describe what you want to achieve:', 'rjm-css-advisor' ),
@@ -164,11 +170,20 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 *
 	 * @param array $field  ACF field definition.
 	 */
+	public static function maybe_lock_css_field( $field ) {
+		if ( RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user() ) {
+			$field['readonly'] = 1;
+		}
+
+		return $field;
+	}
+
 	public static function render_advice_button( $field ) {
 		$layout_name     = self::detect_layout_name( $field );
 		$field_name      = $field['_name'] ?? $field['name'] ?? 'custom_css';
 		$field_key       = $field['key'] ?? '';
 		$is_global       = ( $field_name === 'global_custom_css' );
+		$lock_active     = RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user();
 		$native_settings = self::detect_native_settings( $field, $field_name, $layout_name );
 
 		$panel_id = 'rjm-advice-' . wp_generate_uuid4();
@@ -195,10 +210,15 @@ class RJM_CSS_Advisor_ACF_Integration {
 				class="button rjm-css-advisor-btn"
 				aria-expanded="false"
 				aria-controls="<?php echo esc_attr( $panel_id ); ?>"
+				<?php disabled( $lock_active ); ?>
 			>
 				<?php esc_html_e( 'Generate Custom CSS ✨', 'rjm-css-advisor' ); ?>
 			</button>
+			<?php if ( $lock_active ) : ?>
+				<p class="description"><?php esc_html_e( 'Custom CSS edit access is disabled for your account.', 'rjm-css-advisor' ); ?></p>
+			<?php endif; ?>
 
+			<?php if ( ! $lock_active ) : ?>
 			<div
 				id="<?php echo esc_attr( $panel_id ); ?>"
 				class="rjm-css-advisor-panel"
@@ -377,6 +397,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 
 				</div>
 			</div>
+			<?php endif; ?>
 		</div>
 		<?php
 	}

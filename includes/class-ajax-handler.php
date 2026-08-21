@@ -65,6 +65,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$field_key = sanitize_text_field( wp_unslash( $_POST['field_key'] ?? '' ) );
 		$is_global = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global = self::normalize_is_global_request( $field, $field_key, $is_global );
+		$layout    = self::normalize_layout_request( $layout, $field_key );
 		$post_id   = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
 
 		return self::build_memory_scope( $post_id, $field, $field_key, $layout, $is_global );
@@ -261,6 +262,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$field_key = sanitize_text_field( wp_unslash( $_POST['field_key'] ?? '' ) );
 		$is_global = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global = self::normalize_is_global_request( $field, $field_key, $is_global );
+		$layout    = self::normalize_layout_request( $layout, $field_key );
 		$goal      = sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) );
 		$post_id   = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
 		$current_css = self::sanitize_css_payload( wp_unslash( $_POST['current_css'] ?? '' ) );
@@ -330,6 +332,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$field_key   = sanitize_text_field( wp_unslash( $_POST['field_key'] ?? '' ) );
 		$is_global   = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global   = self::normalize_is_global_request( $field, $field_key, $is_global );
+		$layout      = self::normalize_layout_request( $layout, $field_key );
 		$message     = sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) );
 		$screenshot_data = $_POST['screenshot_data'] ?? [];
 		$screenshot_name = $_POST['screenshot_name'] ?? [];
@@ -484,6 +487,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$field       = sanitize_key( (string) ( $request->get_param( 'field' ) ?: 'custom_css' ) );
 		$field_key   = sanitize_text_field( (string) $request->get_param( 'field_key' ) );
 		$is_global   = self::normalize_is_global_request( $field, $field_key, (bool) $request->get_param( 'is_global' ) );
+		$layout      = self::normalize_layout_request( $layout, $field_key );
 		$message     = sanitize_textarea_field( (string) $request->get_param( 'message' ) );
 		$session_id  = sanitize_text_field( (string) $request->get_param( 'session_id' ) );
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) $request->get_param( 'breakpoints' ) ) ) );
@@ -863,6 +867,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$field_key   = sanitize_text_field( wp_unslash( $_POST['field_key'] ?? '' ) );
 		$is_global   = ( ( $_POST['is_global'] ?? '0' ) === '1' );
 		$is_global   = self::normalize_is_global_request( $field, $field_key, $is_global );
+		$layout      = self::normalize_layout_request( $layout, $field_key );
 		$goal        = sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) );
 		$breakpoints = array_values( array_filter( array_map( 'sanitize_key', (array) wp_unslash( $_POST['breakpoints'] ?? [] ) ) ) );
 		$post_id     = absint( wp_unslash( $_POST['post_id'] ?? 0 ) );
@@ -1790,6 +1795,26 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			|| 'global_custom_css' === $field_name
 			|| 'acf[' . self::GLOBAL_CSS_FIELD_KEY . ']' === $field_name
 			|| self::GLOBAL_CSS_FIELD_KEY === $field_key;
+	}
+
+	/**
+	 * Resolve standalone Theme Settings field groups (Navbar/Footer/Banner) to
+	 * their layout slug via field key, since the client can't always detect
+	 * them (they're not inside an ACF flexible-content row).
+	 *
+	 * @param string $layout
+	 * @param string $field_key
+	 * @return string
+	 */
+	private static function normalize_layout_request( $layout, $field_key ) {
+		$layout    = (string) $layout;
+		$field_key = (string) $field_key;
+
+		if ( '' !== $layout ) {
+			return $layout;
+		}
+
+		return RJM_CSS_Advisor_ACF_Integration::FIELD_KEY_TO_LAYOUT[ $field_key ] ?? $layout;
 	}
 
 	/**

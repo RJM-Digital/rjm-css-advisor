@@ -24,6 +24,16 @@ class RJM_CSS_Advisor_ACF_Integration {
 		'global_custom_css', // Theme Settings → Global Custom CSS (wpComponent).
 	];
 
+	// Standalone Theme Settings field groups (Navbar/Footer/Banner) are plain
+	// field groups, not flexible_content layouts, so their custom_css field
+	// can't be resolved via acf_get_loop()/get_row_layout(). Their field keys
+	// are globally unique, so map them straight to a layout slug here.
+	const FIELD_KEY_TO_LAYOUT = [
+		'field_695f41a22c8ef' => 'banner',
+		'field_695f4e2f75aaf' => 'footer',
+		'field_695f412005e0b' => 'navbar',
+	];
+
 	public static function init() {
 		// Only run when ACF is active.
 		if ( ! function_exists( 'acf_get_field' ) && ! defined( 'ACF_VERSION' ) ) {
@@ -389,6 +399,13 @@ class RJM_CSS_Advisor_ACF_Integration {
 		// Global CSS field — not part of a layout.
 		if ( ( $field['name'] ?? '' ) === 'global_custom_css' ) {
 			return '';
+		}
+
+		// Standalone Theme Settings field groups (Navbar/Footer/Banner) — matched
+		// by field key since they're never inside an ACF flexible-content loop.
+		$field_key = (string) ( $field['key'] ?? '' );
+		if ( isset( self::FIELD_KEY_TO_LAYOUT[ $field_key ] ) ) {
+			return self::FIELD_KEY_TO_LAYOUT[ $field_key ];
 		}
 
 		// ACF exposes the active layout via acf_get_loop().

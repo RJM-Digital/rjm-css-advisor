@@ -54,6 +54,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 		'podcast_section'        => 'PodcastSection',
 		'i_frame'                => 'IFrame',
 		'custom_code_block'      => 'CustomCodeBlock',
+		'footer'                 => 'Footer',
+		'navbar'                 => 'NavBar',
+		'banner'                 => 'Banner',
 	];
 
 	// Human-readable labels for sub-component CSS field names.

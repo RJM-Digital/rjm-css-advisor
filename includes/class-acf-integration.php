@@ -733,10 +733,13 @@ class RJM_CSS_Advisor_ACF_Integration {
 	 * This plugin does not define the global_custom_css field group itself
 	 * (it's supplied by the active theme), so the storage location can't be
 	 * hardcoded. Sites can force a specific value via the
-	 * rjm_css_advisor_global_css_post_id filter; otherwise this falls back to
-	 * the common ACF Options Page convention (post_id 'option').
+	 * rjm_css_advisor_global_css_post_id filter; otherwise this tries the
+	 * common ACF Options Page convention (post_id 'option'), then falls back
+	 * to detecting a field group pinned to one specific post via a "Post is
+	 * equal to {post}" location rule (a common way to build a singleton
+	 * "Theme Settings" screen without ACF PRO Options Pages).
 	 *
-	 * @return string|null  ACF post_id (e.g. 'option'), or null if unresolved.
+	 * @return string|null  ACF post_id (e.g. 'option' or a post ID), or null if unresolved.
 	 */
 	public static function resolve_global_css_post_id() {
 		static $resolved = false;
@@ -762,7 +765,50 @@ class RJM_CSS_Advisor_ACF_Integration {
 			}
 		}
 
+		$pinned_post_id = self::find_pinned_post_id_for_field( 'global_custom_css' );
+		if ( null !== $pinned_post_id && function_exists( 'get_field' ) ) {
+			$value = get_field( 'global_custom_css', $pinned_post_id );
+			if ( false !== $value && null !== $value ) {
+				$cached_value = $pinned_post_id;
+				return $cached_value;
+			}
+		}
+
 		return $cached_value;
+	}
+
+	/**
+	 * Find the specific post ID a field group is pinned to via a "Post is
+	 * equal to {post}" location rule (ACF's `param => 'post'` rule type),
+	 * distinct from a "Post Type is equal to" rule which targets many posts.
+	 *
+	 * @param string $field_name
+	 * @return string|null
+	 */
+	private static function find_pinned_post_id_for_field( $field_name ) {
+		if ( ! function_exists( 'acf_get_field_groups' ) || ! function_exists( 'acf_get_fields' ) ) {
+			return null;
+		}
+
+		foreach ( (array) acf_get_field_groups() as $group ) {
+			$fields = acf_get_fields( $group ) ?: [];
+			if ( null === self::search_fields_for_name( $fields, $field_name, '' ) ) {
+				continue;
+			}
+
+			foreach ( (array) ( $group['location'] ?? [] ) as $rule_group ) {
+				foreach ( (array) $rule_group as $rule ) {
+					if ( 'post' === ( $rule['param'] ?? '' )
+						&& '==' === ( $rule['operator'] ?? '' )
+						&& ! empty( $rule['value'] )
+					) {
+						return (string) $rule['value'];
+					}
+				}
+			}
+		}
+
+		return null;
 	}
 
 	/**

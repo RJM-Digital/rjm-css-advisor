@@ -3,7 +3,7 @@
  * Plugin Name:       RJM CSS Advisor
  * Plugin URI:        https://github.com/RJM-Digital/import-template-coach
  * Description:       AI-powered Custom CSS code generation for every ACF component. Describe your styling goal and the plugin writes the exact CSS for you.
- * Version:           1.9.0
+ * Version:           1.9.1
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            RJM Digital
@@ -13,7 +13,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'RJM_CSS_ADVISOR_VERSION', '1.9.0' );
+define( 'RJM_CSS_ADVISOR_VERSION', '1.9.1' );
 define( 'RJM_CSS_ADVISOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'RJM_CSS_ADVISOR_URL', plugin_dir_url( __FILE__ ) );
 

@@ -724,6 +724,46 @@ class RJM_CSS_Advisor_ACF_Integration {
 		return null;
 	}
 
+	/**
+	 * Resolve the ACF "post_id" that the site-wide global_custom_css field is
+	 * stored against, so it can be read/written from outside the current
+	 * request's own post (e.g. saving a component's snippet to the global
+	 * field while editing a page).
+	 *
+	 * This plugin does not define the global_custom_css field group itself
+	 * (it's supplied by the active theme), so the storage location can't be
+	 * hardcoded. Sites can force a specific value via the
+	 * rjm_css_advisor_global_css_post_id filter; otherwise this falls back to
+	 * the common ACF Options Page convention (post_id 'option').
+	 *
+	 * @return string|null  ACF post_id (e.g. 'option'), or null if unresolved.
+	 */
+	public static function resolve_global_css_post_id() {
+		static $resolved = false;
+		static $cached_value = null;
+
+		if ( $resolved ) {
+			return $cached_value;
+		}
+
+		$resolved = true;
+
+		$override = apply_filters( 'rjm_css_advisor_global_css_post_id', null );
+		if ( null !== $override && '' !== $override ) {
+			$cached_value = (string) $override;
+			return $cached_value;
+		}
+
+		if ( function_exists( 'get_field' ) ) {
+			$value = get_field( 'global_custom_css', 'option' );
+			if ( false !== $value && null !== $value ) {
+				$cached_value = 'option';
+				return $cached_value;
+			}
+		}
+
+		return $cached_value;
+	}
 
 	/**
 	 * Walk a flat list of ACF sub-fields, recursing into Group/Clone containers,

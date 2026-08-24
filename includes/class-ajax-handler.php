@@ -33,6 +33,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	public static function init() {
 		add_action( 'wp_ajax_rjm_get_css_advice', [ __CLASS__, 'handle' ] );
 		add_action( 'wp_ajax_rjm_generate_css',   [ __CLASS__, 'handle_generate' ] );
+		add_action( 'wp_ajax_rjm_save_global_css', [ __CLASS__, 'handle_save_global_css' ] );
 		add_action( 'wp_ajax_rjm_plan_css_chat',  [ __CLASS__, 'handle_plan_chat' ] );
 		add_action( 'wp_ajax_rjm_plan_css_generate', [ __CLASS__, 'handle_plan_generate' ] );
 		add_action( 'wp_ajax_rjm_build_css_start', [ __CLASS__, 'handle_build_start' ] );
@@ -322,7 +323,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			wp_send_json_error( [ 'message' => $result->get_error_message() ] );
 		}
 
-		$html = self::render_generated_response( $result );
+		$html = self::render_generated_response( $result, $is_global );
 
 		$memory['current_css']    = $existing_css_context;
 		$memory['last_generated'] = (string) ( $result['css'] ?? '' );
@@ -339,6 +340,90 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		] );
 
 		wp_send_json_success( [ 'html' => $html ] );
+	}
+
+	/**
+	 * Handle the rjm_save_global_css AJAX action — append a generated snippet
+	 * to the site-wide Global Custom CSS field instead of the local field the
+	 * chat panel is attached to.
+	 *
+	 * Expected POST parameters:
+	 *   nonce  - WordPress nonce (action: rjm_css_advisor)
+	 *   code   - The CSS snippet to save
+	 *   layout - ACF flexible content layout name, used only for the source comment
+	 *   field  - ACF field name, used only for the source comment
+	 */
+	public static function handle_save_global_css() {
+		check_ajax_referer( 'rjm_css_advisor', 'nonce' );
+		self::enforce_generation_access();
+
+		$layout = sanitize_key( wp_unslash( $_POST['layout'] ?? '' ) );
+		$field  = sanitize_key( wp_unslash( $_POST['field']  ?? '' ) );
+		$code   = self::sanitize_css_payload( wp_unslash( $_POST['code'] ?? '' ) );
+
+		if ( ! $code ) {
+			wp_send_json_error( [ 'message' => __( 'There is no CSS to save.', 'rjm-css-advisor' ) ] );
+		}
+
+		if ( ! function_exists( 'get_field' ) || ! function_exists( 'update_field' ) ) {
+			wp_send_json_error( [ 'message' => __( 'Advanced Custom Fields is required to save global CSS.', 'rjm-css-advisor' ) ] );
+		}
+
+		$global_post_id = RJM_CSS_Advisor_ACF_Integration::resolve_global_css_post_id();
+		if ( null === $global_post_id ) {
+			wp_send_json_error( [ 'message' => __( 'Could not locate the Global Custom CSS field. Ask an administrator to configure the rjm_css_advisor_global_css_post_id filter.', 'rjm-css-advisor' ) ] );
+		}
+
+		$existing = (string) get_field( 'global_custom_css', $global_post_id );
+		$source   = trim( $layout ? $layout : $field ) ?: __( 'a component', 'rjm-css-advisor' );
+		$comment  = sprintf(
+			'/* Added via CSS Advisor — from "%1$s" on %2$s */',
+			$source,
+			gmdate( 'Y-m-d' )
+		);
+		$snippet = $comment . "\n" . $code;
+		$merged  = self::append_global_css_snippet( $existing, $snippet );
+
+		self::log_debug_request( 'save_global_css', [
+			'layout'    => $layout,
+			'field'     => $field,
+			'post_id'   => $global_post_id,
+			'css_length' => strlen( $code ),
+		] );
+
+		$saved = update_field( 'global_custom_css', $merged, $global_post_id );
+		if ( ! $saved ) {
+			self::log_debug_error( 'save_global_css', new WP_Error( 'update_field_failed', 'update_field() returned false' ), [
+				'post_id' => $global_post_id,
+			] );
+			wp_send_json_error( [ 'message' => __( 'Failed to save to the Global Custom CSS field.', 'rjm-css-advisor' ) ] );
+		}
+
+		self::log_debug_success( 'save_global_css', [
+			'layout'  => $layout,
+			'field'   => $field,
+			'post_id' => $global_post_id,
+		] );
+
+		wp_send_json_success( [ 'message' => __( 'Saved to the site-wide Global Custom CSS field.', 'rjm-css-advisor' ) ] );
+	}
+
+	/**
+	 * Append a snippet to existing global CSS, preserving whatever was there.
+	 *
+	 * @param string $existing
+	 * @param string $snippet
+	 * @return string
+	 */
+	private static function append_global_css_snippet( $existing, $snippet ) {
+		$existing = trim( (string) $existing );
+		$snippet  = trim( (string) $snippet );
+
+		if ( ! $existing ) {
+			return $snippet . "\n";
+		}
+
+		return $existing . "\n\n" . $snippet;
 	}
 
 	/**
@@ -866,7 +951,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		delete_transient( self::plan_session_key( $session_id ) );
 
 		wp_send_json_success( [
-			'html' => self::render_generated_response( $result ),
+			'html' => self::render_generated_response( $result, ! empty( $session['is_global'] ) ),
 		] );
 	}
 
@@ -1064,7 +1149,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 			wp_send_json_success( [
 				'complete' => true,
-				'html'     => self::render_generated_response( $final_result ),
+				'html'     => self::render_generated_response( $final_result, ! empty( $session['is_global'] ) ),
 			] );
 		}
 
@@ -1164,7 +1249,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			wp_send_json_error( [ 'message' => $result->get_error_message() ] );
 		}
 
-		$html = self::render_advice_html( $result['advice'] );
+		$html = self::render_advice_html( $result['advice'], $is_global );
 
 		self::log_debug_success( 'legacy_get_advice', [
 			'layout'     => $layout,
@@ -1190,9 +1275,10 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	 * We convert these to HTML manually (no markdown library dependency).
 	 *
 	 * @param string $markdown
+	 * @param bool   $is_global Whether this advice is for the global_custom_css field.
 	 * @return string
 	 */
-	private static function render_advice_html( $markdown ) {
+	private static function render_advice_html( $markdown, $is_global = false ) {
 		$lines  = explode( "\n", $markdown );
 		$html   = '';
 		$in_code = false;
@@ -1203,7 +1289,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 			if ( preg_match( '/^```/', $line ) ) {
 				if ( $in_code ) {
 					// Close code block.
-					$html   .= self::render_code_block( $code_buf );
+					$html   .= self::render_code_block( $code_buf, $is_global );
 					$code_buf = '';
 					$in_code  = false;
 				} else {
@@ -1249,7 +1335,7 @@ class RJM_CSS_Advisor_Ajax_Handler {
 
 		// Close any unclosed code block.
 		if ( $in_code && $code_buf ) {
-			$html .= self::render_code_block( $code_buf );
+			$html .= self::render_code_block( $code_buf, $is_global );
 		}
 
 		return $html;
@@ -1258,10 +1344,14 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	/**
 	 * Render a CSS code block with a Copy button and optional Insert button.
 	 *
-	 * @param string $code  Raw CSS code.
+	 * The "save as global style" checkbox is only offered when this snippet
+	 * isn't already destined for the global field itself.
+	 *
+	 * @param string $code      Raw CSS code.
+	 * @param bool   $is_global Whether this snippet belongs to the global_custom_css field.
 	 * @return string
 	 */
-	private static function render_code_block( $code ) {
+	private static function render_code_block( $code, $is_global = false ) {
 		$code = rtrim( $code );
 		if ( ! $code ) {
 			return '';
@@ -1271,19 +1361,31 @@ class RJM_CSS_Advisor_Ajax_Handler {
 		$escaped = esc_html( $code );
 		$encoded = esc_attr( $code );
 
+		$global_toggle = '';
+		if ( ! $is_global ) {
+			$global_toggle = sprintf(
+				'<label class="rjm-global-toggle"><input type="checkbox" class="rjm-global-checkbox" /> %s</label>',
+				esc_html__( 'Save as global style', 'rjm-css-advisor' )
+			);
+		}
+
 		return sprintf(
 			'<div class="rjm-code-block-wrap">
 				<pre class="rjm-code-block" id="%s"><code>%s</code></pre>
 				<div class="rjm-code-actions">
 					<button type="button" class="button button-small rjm-copy-btn" data-target="%s">%s</button>
-					<button type="button" class="button button-small rjm-insert-btn" data-code="%s">%s</button>
+					%s
+					<button type="button" class="button button-small rjm-insert-btn" data-code="%s" data-label-local="%s" data-label-global="%s">%s</button>
 				</div>
 			</div>',
 			esc_attr( $id ),
 			$escaped,
 			esc_attr( $id ),
 			esc_html__( 'Copy', 'rjm-css-advisor' ),
+			$global_toggle,
 			$encoded,
+			esc_attr__( '↑ Insert into field', 'rjm-css-advisor' ),
+			esc_attr__( '⇪ Save to Global CSS', 'rjm-css-advisor' ),
 			esc_html__( '↑ Insert into field', 'rjm-css-advisor' )
 		);
 	}
@@ -1291,11 +1393,12 @@ class RJM_CSS_Advisor_Ajax_Handler {
 	/**
 	 * Render the generated CSS plus the plain-language guidance box.
 	 *
-	 * @param array $result Structured AI response.
+	 * @param array $result    Structured AI response.
+	 * @param bool  $is_global Whether this snippet belongs to the global_custom_css field.
 	 * @return string
 	 */
-	private static function render_generated_response( $result ) {
-		$html = self::render_code_block( $result['css'] ?? '' );
+	private static function render_generated_response( $result, $is_global = false ) {
+		$html = self::render_code_block( $result['css'] ?? '', $is_global );
 		$html .= self::render_explanation_box( $result );
 
 		return $html;

@@ -457,6 +457,25 @@ body.rjm-css-advisor-locked {
 	background: rgba(255, 255, 255, 0.2) !important;
 }
 
+.rjm-global-toggle {
+	align-items: center;
+	color: #a6adc8;
+	display: flex;
+	font-size: 11px;
+	gap: 4px;
+	margin-left: auto;
+}
+
+.rjm-global-toggle input {
+	margin: 0;
+}
+
+.rjm-insert-btn.is-global-target {
+	background: rgba(148, 226, 213, 0.2) !important;
+	border-color: rgba(148, 226, 213, 0.4) !important;
+	color: #94e2d5 !important;
+}
+
 /* ── AI summary box ─────────────────────────────────────────────────────── */
 .rjm-ai-summary-wrap {
 	margin: 0 0 16px;

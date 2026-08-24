@@ -30,6 +30,7 @@
 		$(document).on('click',   '.rjm-copy-btn',             onCopyClick);
 		$(document).on('click',   '.rjm-chat-code-copy',       onChatCodeCopyClick);
 		$(document).on('click',   '.rjm-insert-btn',           onInsertClick);
+		$(document).on('change',  '.rjm-global-checkbox',      onGlobalToggleChange);
 		// Ctrl/Cmd + Enter inside the goal textarea submits the form.
 		$(document).on('keydown', '.rjm-css-goal-input',       onGoalKeydown);
 		$(document).on('paste',   '.rjm-css-goal-input',       onGoalPaste);
@@ -1601,11 +1602,29 @@
 	// Insert snippet into the adjacent CSS textarea
 	// -------------------------------------------------------------------------
 
+	function onGlobalToggleChange() {
+		var $checkbox = $(this);
+		var $actions  = $checkbox.closest('.rjm-code-actions');
+		var $btn      = $actions.find('.rjm-insert-btn');
+		var isGlobal  = $checkbox.is(':checked');
+
+		$btn
+			.text(isGlobal ? $btn.data('label-global') : $btn.data('label-local'))
+			.toggleClass('is-global-target', isGlobal);
+	}
+
 	function onInsertClick() {
 		var $btn  = $(this);
 		var code  = decodeHtmlEntities($btn.data('code') || '');
 		var $wrap = $btn.closest('.rjm-css-advisor-wrap');
 		var $panel = getPanelFromWrap($wrap);
+		var $globalCheckbox = $btn.closest('.rjm-code-actions').find('.rjm-global-checkbox');
+
+		if ($globalCheckbox.length && $globalCheckbox.is(':checked')) {
+			saveToGlobalCss($btn, $wrap, $panel, code);
+			return;
+		}
+
 		var selectedBreakpoints = getSelectedBreakpoints($panel);
 
 		var $textarea = getTargetTextarea($wrap);
@@ -1631,6 +1650,34 @@
 		setTimeout(function () {
 			$btn.text(original).prop('disabled', false);
 		}, 2000);
+	}
+
+	function saveToGlobalCss($btn, $wrap, $panel, code) {
+		var originalLabel = $btn.data('label-global');
+		var ajaxUrl = (cfg.ajaxUrl || '').replace(/^https?:\/\/[^\/]+/, window.location.origin);
+		$btn.text('Saving…').prop('disabled', true);
+
+		$.post(ajaxUrl, {
+			action: 'rjm_save_global_css',
+			nonce: cfg.nonce,
+			code: code,
+			layout: $wrap.data('layout') || '',
+			field: $wrap.data('field') || '',
+		}).done(function (response) {
+			if (response && response.success) {
+				$btn.text('✓ Saved to Global CSS');
+				showInsertStatus($panel, (response.data && response.data.message) || 'Saved to the site-wide Global Custom CSS field.', false);
+				setTimeout(function () {
+					$btn.text(originalLabel).prop('disabled', false);
+				}, 2000);
+			} else {
+				$btn.text(originalLabel).prop('disabled', false);
+				showInsertStatus($panel, (response && response.data && response.data.message) || 'Failed to save to the Global Custom CSS field.', true);
+			}
+		}).fail(function () {
+			$btn.text(originalLabel).prop('disabled', false);
+			showInsertStatus($panel, 'Failed to save to the Global Custom CSS field.', true);
+		});
 	}
 
 	function getTargetTextarea($wrap) {

@@ -46,6 +46,7 @@
 		$(document).on('click',   '.rjm-css-history-delete',  onHistoryDeleteClick);
 		$(document).on('click',   '.rjm-css-history-clear',   onHistoryClearClick);
 		$(document).on('click',   '.rjm-css-example-chip',     onExampleChipClick);
+		$(document).on('click',   '.rjm-troubleshoot-handoff-btn', onHandoffUseClick);
 		$(document).on('click',   '.rjm-css-menu-btn',         onMenuButtonClick);
 		$(document).on('click',   '.rjm-css-menu-popover',     function (e) { e.stopPropagation(); });
 		$(document).on('change',  '.rjm-css-breakpoint-input', onBreakpointChange);
@@ -91,6 +92,11 @@
 
 		if (mode === 'ask') {
 			sendPlanMessage($wrap, $panel, goal, breakpoints);
+			return;
+		}
+
+		if (mode === 'troubleshoot') {
+			sendTroubleshootMessage($wrap, $panel, goal);
 			return;
 		}
 
@@ -372,7 +378,7 @@
 			native_settings: reqCtx.nativeSettings,
 		};
 
-		if (!canStream()) {
+		if (!canStream() || !cfg.streamUrl) {
 			sendPlanMessageBlocking($panel, payload);
 			return;
 		}
@@ -380,8 +386,263 @@
 		streamPlanMessage($panel, payload);
 	}
 
+	// -------------------------------------------------------------------------
+	// Step 2 — Troubleshoot mode: diagnose, never author CSS
+	// -------------------------------------------------------------------------
+
+	function sendTroubleshootMessage($wrap, $panel, message) {
+		var reqCtx = collectRequestContext($wrap);
+		var screenshots = $panel.data('pendingScreenshots') || [];
+
+		setResultsPriorityState($panel, true);
+		appendMessageBubble($panel, 'user', message, screenshots);
+		$panel.find('.rjm-css-goal-input').val('').focus();
+		autoGrowTextarea($panel.find('.rjm-css-goal-input')[0]);
+		clearPendingScreenshot($panel);
+
+		var payload = {
+			layout: reqCtx.layoutName,
+			field: reqCtx.fieldName,
+			field_key: reqCtx.fieldKey,
+			post_id: reqCtx.postId,
+			current_css: reqCtx.currentCss,
+			is_global: reqCtx.isGlobal,
+			message: message,
+			screenshot_data: screenshots.map(function (screenshot) { return screenshot.data; }),
+			screenshot_name: screenshots.map(function (screenshot) { return screenshot.name; }),
+			session_id: $panel.data('troubleshootSessionId') || '',
+			native_settings: reqCtx.nativeSettings,
+		};
+
+		if (!canStream() || !cfg.troubleshootStreamUrl) {
+			sendTroubleshootMessageBlocking($panel, payload);
+			return;
+		}
+
+		streamTroubleshootMessage($panel, payload);
+	}
+
+	/**
+	 * Consume the SSE troubleshoot stream, appending tokens to a live assistant bubble.
+	 */
+	function streamTroubleshootMessage($panel, payload) {
+		var controller = new AbortController();
+		var $thinking = appendThinkingBubble($panel);
+		var $bubble = null;
+		var text = '';
+		var pending = '';
+		var frame = null;
+		var settled = false;
+		var started = false;
+
+		setStreamingState($panel, true, controller);
+
+		function flush() {
+			frame = null;
+			if (!pending) {
+				return;
+			}
+			text += pending;
+			pending = '';
+			if (!$bubble) {
+				removeThinkingBubble($thinking);
+				$bubble = appendMessageBubble($panel, 'assistant', '');
+				$bubble.addClass('is-streaming');
+			}
+			setBubbleContent($bubble, text);
+			scrollTranscript($panel);
+		}
+
+		function queue(chunk) {
+			pending += chunk;
+			if (frame === null) {
+				frame = window.requestAnimationFrame(flush);
+			}
+		}
+
+		function finish() {
+			if (frame !== null) {
+				window.cancelAnimationFrame(frame);
+			}
+			flush();
+			if ($bubble) {
+				$bubble.removeClass('is-streaming');
+			}
+			removeThinkingBubble($thinking);
+			setStreamingState($panel, false, null);
+		}
+
+		function fail(message) {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			finish();
+			if (!started) {
+				if ($bubble) {
+					$bubble.remove();
+				}
+				sendTroubleshootMessageBlocking($panel, payload);
+				return;
+			}
+			appendNoticeBubble($panel, message);
+		}
+
+		window.fetch(normalizeUrl(cfg.troubleshootStreamUrl), {
+			method: 'POST',
+			credentials: 'same-origin',
+			signal: controller.signal,
+			headers: {
+				'Content-Type': 'application/json',
+				'X-WP-Nonce': cfg.restNonce || '',
+			},
+			body: JSON.stringify(payload),
+		}).then(function (response) {
+			if (!response.ok || !response.body) {
+				throw new Error(response.statusText || 'Request failed');
+			}
+
+			var reader = response.body.getReader();
+			var decoder = new TextDecoder();
+			var buffer = '';
+
+			function read() {
+				return reader.read().then(function (result) {
+					if (result.done) {
+						if (!settled) {
+							settled = true;
+							finish();
+						}
+						return;
+					}
+
+					buffer += decoder.decode(result.value, { stream: true });
+
+					var split;
+					while ((split = buffer.indexOf('\n\n')) !== -1) {
+						var raw = buffer.slice(0, split);
+						buffer = buffer.slice(split + 2);
+						var event = parseSseFrame(raw);
+						if (!event) {
+							continue;
+						}
+
+						if (event.name === 'delta' && typeof event.data.text === 'string') {
+							started = true;
+							queue(event.data.text);
+						} else if (event.name === 'open') {
+							$panel.data('troubleshootSessionId', event.data.session_id || '');
+						} else if (event.name === 'done') {
+							settled = true;
+							$panel.data('troubleshootSessionId', event.data.session_id || '');
+							finish();
+							if ($bubble && event.data.handoff_instruction) {
+								renderHandoffCard($bubble, event.data.handoff_instruction);
+							}
+							refreshHistory(getWrapFromPanel($panel), $panel);
+							continue;
+						} else if (event.name === 'title') {
+							syncHistoryTitle($panel, event.data.session_id || '', event.data.chat_title || '');
+							continue;
+						} else if (event.name === 'error') {
+							settled = true;
+							fail(event.data.message || 'Request failed');
+							return;
+						}
+					}
+
+					return read();
+				});
+			}
+
+			return read();
+		}).catch(function (error) {
+			if (controller.signal.aborted) {
+				return;
+			}
+			fail(error && error.message ? error.message : 'Request failed');
+		});
+	}
+
+	/**
+	 * Non-streaming fallback used when SSE is unavailable or fails before any token arrives.
+	 */
+	function sendTroubleshootMessageBlocking($panel, payload) {
+		var $thinking = appendThinkingBubble($panel);
+
+		$.ajax({
+			url: normalizeAjaxUrl(),
+			type: 'POST',
+			data: $.extend({}, payload, {
+				action: 'rjm_troubleshoot_chat',
+				nonce: cfg.nonce,
+				is_global: payload.is_global ? '1' : '0',
+			}),
+			success: function (response) {
+				removeThinkingBubble($thinking);
+				if (!response.success) {
+					appendNoticeBubble($panel, (response.data && response.data.message) || 'Unknown error.');
+					return;
+				}
+
+				var data = response.data || {};
+				$panel.data('troubleshootSessionId', data.session_id || '');
+
+				var messages = data.messages || [];
+				var last = messages.length ? messages[messages.length - 1] : null;
+				if (last && last.role === 'assistant') {
+					var $bubble = appendMessageBubble($panel, 'assistant', '');
+					setBubbleContent($bubble, last.content || '');
+					if (data.handoff_instruction) {
+						renderHandoffCard($bubble, data.handoff_instruction);
+					}
+				}
+
+				scrollTranscript($panel);
+				refreshHistory(getWrapFromPanel($panel), $panel);
+			},
+			error: function (xhr) {
+				removeThinkingBubble($thinking);
+				appendNoticeBubble($panel, xhr.statusText || 'Request failed');
+			},
+		});
+	}
+
+	/**
+	 * Render a distinct "suggested next step" card with a one-click hand-off
+	 * into Ask/Plan mode. Never rendered as plain chat prose or as a code block.
+	 */
+	function renderHandoffCard($bubble, instruction) {
+		var $card = $('<div class="rjm-troubleshoot-handoff"></div>');
+		$card.append($('<p class="rjm-troubleshoot-handoff-label"></p>').text(cfg.i18n.handoffLabel || 'Suggested next step'));
+		$card.append($('<p class="rjm-troubleshoot-handoff-text"></p>').text(instruction));
+		$card.append(
+			$('<button type="button" class="button rjm-troubleshoot-handoff-btn"></button>')
+				.text(cfg.i18n.handoffUseBtn || 'Use in Ask/Plan')
+				.attr('data-instruction', instruction)
+		);
+		$bubble.append($card);
+	}
+
+	/**
+	 * Switch to Ask/Plan mode and pre-fill its input with the suggested instruction,
+	 * without auto-submitting — the user still reviews and sends it themselves.
+	 */
+	function onHandoffUseClick(e) {
+		e.preventDefault();
+		var $panel = $(this).closest('.rjm-css-advisor-panel');
+		var instruction = $(this).attr('data-instruction') || '';
+
+		$panel.find('.rjm-css-mode-input[value="ask"]').prop('checked', true);
+		updateModeUI($panel);
+
+		var $input = $panel.find('.rjm-css-goal-input');
+		$input.val(instruction).focus();
+		autoGrowTextarea($input[0]);
+	}
+
 	function canStream() {
-		return Boolean(cfg.streamUrl && window.fetch && window.AbortController && window.ReadableStream && window.TextDecoder);
+		return Boolean(window.fetch && window.AbortController && window.ReadableStream && window.TextDecoder);
 	}
 
 	/**
@@ -769,7 +1030,7 @@
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		$panel.find('.rjm-css-build-actions').attr('hidden', true);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
-		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
+		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady').removeData('troubleshootSessionId');
 		$panel.find('.rjm-css-goal-form').removeAttr('hidden');
 		updateModeUI($panel);
 		refreshHistory($wrap, $panel);
@@ -800,7 +1061,7 @@
 		$panel.find('.rjm-css-build-actions').attr('hidden', true);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
-		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
+		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady').removeData('troubleshootSessionId');
 		$wrap.find('.rjm-css-advisor-btn').first()
 			.removeAttr('hidden')
 			.text(cfg.i18n.buttonLabel)
@@ -821,7 +1082,7 @@
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
 		abortPlanStream($panel);
-		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
+		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady').removeData('troubleshootSessionId');
 		$wrap.find('.rjm-css-advisor-btn').first().attr('hidden', true);
 		$wrap.find('.rjm-css-advisor-btn').first().attr('aria-expanded', 'true');
 		updateModeUI($panel);
@@ -832,6 +1093,14 @@
 
 	function getSelectedMode($panel) {
 		return $panel.find('.rjm-css-mode-input:checked').val() || 'ask';
+	}
+
+	/**
+	 * Ask/Plan and Troubleshoot each keep their own session id, so switching
+	 * modes never confuses one chat's history with the other's.
+	 */
+	function sessionDataKeyForMode(mode) {
+		return mode === 'troubleshoot' ? 'troubleshootSessionId' : 'planSessionId';
 	}
 
 	// -------------------------------------------------------------------------
@@ -893,6 +1162,7 @@
 
 	function historyRequest($wrap, action, extra, onSuccess) {
 		var reqCtx = collectRequestContext($wrap);
+		var $panel = getPanelFromWrap($wrap);
 
 		return $.ajax({
 			url: normalizeAjaxUrl(),
@@ -905,6 +1175,7 @@
 				field_key: reqCtx.fieldKey,
 				post_id: reqCtx.postId,
 				is_global: reqCtx.isGlobal ? '1' : '0',
+				mode: getSelectedMode($panel),
 			}, extra || {}),
 			success: function (response) {
 				if (response && response.success && onSuccess) {
@@ -922,7 +1193,7 @@
 
 	function renderHistoryList($panel, chats) {
 		var $list = $panel.find('.rjm-css-history-list').empty();
-		var activeId = $panel.data('planSessionId') || '';
+		var activeId = $panel.data(sessionDataKeyForMode(getSelectedMode($panel))) || '';
 
 		$panel.data('historyChats', chats);
 		$panel.find('.rjm-css-history-clear').attr('hidden', chats.length ? null : true);
@@ -1035,7 +1306,7 @@
 		}
 
 		historyRequest(getWrapFromPanel($panel), 'rjm_css_chat_delete', { chat_id: chatId }, function (data) {
-			if (($panel.data('planSessionId') || '') === chatId) {
+			if (($panel.data(sessionDataKeyForMode(getSelectedMode($panel))) || '') === chatId) {
 				resetModeState($panel);
 				setResultsPriorityState($panel, false);
 				updateModeUI($panel);
@@ -1073,11 +1344,15 @@
 				return;
 			}
 
+			var mode = (chat.mode === 'troubleshoot') ? 'troubleshoot' : 'ask';
+
 			abortPlanStream($panel);
 			$panel.find('.rjm-css-advisor-content').html('');
-			$panel.data('planSessionId', chat.id);
-			$panel.data('planReady', Boolean(chat.ready_to_generate));
-			$panel.find('.rjm-css-mode-input[value="ask"]').prop('checked', true);
+			$panel.data(sessionDataKeyForMode(mode), chat.id);
+			if (mode === 'ask') {
+				$panel.data('planReady', Boolean(chat.ready_to_generate));
+			}
+			$panel.find('.rjm-css-mode-input[value="' + mode + '"]').prop('checked', true);
 			applyBreakpoints($panel, chat.breakpoints || []);
 
 			(chat.messages || []).forEach(function (message) {
@@ -1094,7 +1369,9 @@
 
 			setResultsPriorityState($panel, true);
 			updateModeUI($panel);
-			renderPlanReadyNote($panel, chat.ready_to_generate);
+			if (mode === 'ask') {
+				renderPlanReadyNote($panel, chat.ready_to_generate);
+			}
 			scrollTranscript($panel, true);
 			refreshHistory($wrap, $panel);
 		});
@@ -1191,10 +1468,11 @@
 		var mode = getSelectedMode($panel);
 		var $button = $panel.find('.rjm-css-generate-btn');
 		var isPlanReady = Boolean($panel.data('planReady'));
-		var isChat = mode === 'ask';
+		var isAskChat = mode === 'ask';
+		var isChatLike = isAskChat || mode === 'troubleshoot';
 		var label;
 
-		if (isChat) {
+		if (isChatLike) {
 			label = cfg.i18n.sendPlanBtn || 'Send message';
 		} else if (mode === 'build') {
 			label = cfg.i18n.startBuildBtn || 'Start build';
@@ -1208,12 +1486,13 @@
 		$panel.find('.rjm-css-mode-menu .rjm-css-menu-label').text(getModeLabel(mode));
 		updateBreakpointMenuLabel($panel);
 
-		// Screenshots are Ask-only — the generate and build endpoints do not accept them.
-		$panel.find('.rjm-css-screenshot-controls').attr('hidden', !isChat || null);
-		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', (isChat && isPlanReady) ? null : true);
+		// Screenshots are chat-only (Ask/Plan and Troubleshoot) — Generate/Build endpoints don't accept them.
+		$panel.find('.rjm-css-screenshot-controls').attr('hidden', !isChatLike || null);
+		// Only Ask/Plan ever feeds the CSS-generation pipeline; Troubleshoot never does.
+		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', (isAskChat && isPlanReady) ? null : true);
 
-		// In chat mode the header owns New chat / Close, so the mid-panel bar stays hidden.
-		if (isChat) {
+		// In chat-like modes the header owns New chat / Close, so the mid-panel bar stays hidden.
+		if (isChatLike) {
 			$panel.find('.rjm-css-advisor-actions').attr('hidden', true);
 		}
 
@@ -1228,7 +1507,7 @@
 		}
 
 		var copy = getEmptyStateCopy(mode);
-		var examples = (cfg.i18n && cfg.i18n.examplePrompts) || [];
+		var examples = (cfg.i18n && (mode === 'troubleshoot' ? cfg.i18n.examplePromptsTroubleshoot : cfg.i18n.examplePrompts)) || [];
 		var $empty = $('<div class="rjm-css-chat-empty"></div>');
 
 		$empty.append($('<p class="rjm-css-chat-empty-title"></p>').text(copy.title));
@@ -1260,6 +1539,13 @@
 			};
 		}
 
+		if (mode === 'troubleshoot') {
+			return {
+				title: cfg.i18n.emptyTitleTroubleshoot || "Describe what doesn't look right",
+				hint: cfg.i18n.emptyHintTroubleshoot || "Explain what you're seeing in your own words — no CSS knowledge needed.",
+			};
+		}
+
 		return {
 			title: cfg.i18n.emptyTitle || 'Describe the styling you want',
 			hint: cfg.i18n.emptyHint || 'Ask questions and refine the plan before generating CSS.',
@@ -1281,6 +1567,9 @@
 		if (mode === 'build') {
 			return cfg.i18n.modeBuild || 'Build';
 		}
+		if (mode === 'troubleshoot') {
+			return cfg.i18n.modeTroubleshoot || 'Troubleshoot';
+		}
 		return cfg.i18n.modeGenerate || 'Generate';
 	}
 
@@ -1301,7 +1590,7 @@
 		$panel.find('.rjm-css-build-actions').attr('hidden', true);
 		$panel.find('.rjm-css-plan-generate-btn').attr('hidden', true);
 		$panel.find('.rjm-css-insert-status').attr('hidden', true).text('');
-		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady');
+		$panel.removeData('planSessionId').removeData('buildSessionId').removeData('planReady').removeData('troubleshootSessionId');
 	}
 
 	function abortPlanStream($panel) {

@@ -23,6 +23,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 	// Separates the planner's user-facing prose from its trailing metadata JSON.
 	const PLANNER_META_SENTINEL = '<<<RJM_META>>>';
 
+	// Separates the troubleshooter's user-facing prose from its trailing metadata JSON.
+	const TROUBLESHOOT_META_SENTINEL = '<<<RJM_TS_META>>>';
+
 	// Map ACF layout name → React component filename (without path/extension).
 	const LAYOUT_TO_COMPONENT = [
 		'hero'                   => 'Hero',
@@ -175,6 +178,44 @@ class RJM_CSS_Advisor_GitHub_Client {
 	}
 
 	/**
+	 * Run a single Troubleshoot turn: diagnose a described problem and return a
+	 * plain-language explanation, without generating any CSS.
+	 *
+	 * @param string $layout_name
+	 * @param string $field_name
+	 * @param bool   $is_global
+	 * @param array  $messages
+	 * @param string $existing_css_context
+	 * @param array  $native_settings
+	 * @return array|WP_Error
+	 */
+	public function troubleshoot_css_turn( $layout_name, $field_name = 'custom_css', $is_global = false, $messages = [], $existing_css_context = '', $native_settings = [] ) {
+		$request = $this->build_troubleshoot_request( $layout_name, $field_name, $is_global, $messages, $existing_css_context, $native_settings );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$raw = $this->call_copilot_with_context(
+			$request['token'],
+			'CSS Troubleshooter',
+			$request['prompt'],
+			$request['system_prompt'],
+			$request['screenshots']
+		);
+
+		if ( is_wp_error( $raw ) ) {
+			$this->log_debug_error( 'troubleshoot_css_turn', $raw, [
+				'layout'    => $layout_name,
+				'field'     => $field_name,
+				'is_global' => $is_global,
+			] );
+			return $raw;
+		}
+
+		return self::split_troubleshoot_output( $raw );
+	}
+
+	/**
 	 * Produce a short label for a saved chat.
 	 *
 	 * @param string $user_message
@@ -272,6 +313,70 @@ class RJM_CSS_Advisor_GitHub_Client {
 	}
 
 	/**
+	 * Run a Troubleshoot turn, invoking $on_delta with user-facing prose as it arrives.
+	 *
+	 * @param callable $on_delta  Receives each chunk of prose as a string.
+	 * @return array|WP_Error Same shape as troubleshoot_css_turn().
+	 */
+	public function troubleshoot_css_turn_stream( $layout_name, $field_name, $is_global, $messages, $existing_css_context, $native_settings, callable $on_delta ) {
+		$request = $this->build_troubleshoot_request( $layout_name, $field_name, $is_global, $messages, $existing_css_context, $native_settings );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$sentinel     = self::TROUBLESHOOT_META_SENTINEL;
+		$emitted      = 0;
+		$sentinel_hit = false;
+
+		// Hold back a tail long enough to recognise the sentinel before it is emitted.
+		$filter = function ( $full ) use ( $sentinel, &$emitted, &$sentinel_hit, $on_delta ) {
+			if ( $sentinel_hit ) {
+				return;
+			}
+
+			$position = strpos( $full, $sentinel );
+			if ( false !== $position ) {
+				$sentinel_hit = true;
+				$visible      = substr( $full, 0, $position );
+			} else {
+				$visible = substr( $full, 0, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
+			}
+
+			if ( strlen( $visible ) > $emitted ) {
+				$chunk   = substr( $visible, $emitted );
+				$emitted = strlen( $visible );
+				$on_delta( $chunk );
+			}
+		};
+
+		$raw = $this->call_ai_stream(
+			$request['token'],
+			$request['prompt'],
+			$request['system_prompt'],
+			$request['screenshots'],
+			$filter
+		);
+
+		if ( is_wp_error( $raw ) ) {
+			$this->log_debug_error( 'troubleshoot_css_turn_stream', $raw, [
+				'layout'    => $layout_name,
+				'field'     => $field_name,
+				'is_global' => $is_global,
+			] );
+			return $raw;
+		}
+
+		$result = self::split_troubleshoot_output( $raw );
+
+		// Flush any prose still held back by the lookahead window.
+		if ( ! $sentinel_hit && strlen( $result['assistant_message'] ) > $emitted ) {
+			$on_delta( substr( $result['assistant_message'], $emitted ) );
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Assemble the token, prompt and system prompt for a planner turn.
 	 *
 	 * @return array|WP_Error
@@ -303,6 +408,41 @@ class RJM_CSS_Advisor_GitHub_Client {
 			'token'         => $token,
 			'prompt'        => $prompt,
 			'system_prompt' => $this->get_css_planner_system_prompt(),
+			'screenshots'   => $this->get_screenshot_data( $messages ),
+		];
+	}
+
+	/**
+	 * Assemble the token, prompt and system prompt for a troubleshoot turn.
+	 *
+	 * @return array|WP_Error
+	 */
+	private function build_troubleshoot_request( $layout_name, $field_name, $is_global, $messages, $existing_css_context, $native_settings = [] ) {
+		$token = RJM_CSS_Advisor_Settings::get_token();
+		if ( ! $token ) {
+			return new WP_Error( 'no_token', __( 'No GitHub token configured. Please visit Settings → RJM CSS Advisor.', 'rjm-css-advisor' ) );
+		}
+
+		$context = $this->build_troubleshoot_context( $token, $layout_name, $field_name, $is_global );
+		if ( is_wp_error( $context ) ) {
+			$this->log_debug_error( 'troubleshoot_css_turn', $context, [
+				'layout'    => $layout_name,
+				'field'     => $field_name,
+				'is_global' => $is_global,
+			] );
+			return $context;
+		}
+
+		$prompt  = "Context:\n" . $context['context'] . "\n\n";
+		$prompt .= $this->build_native_settings_context( $native_settings );
+		$prompt .= $this->build_existing_css_context_block( $existing_css_context );
+		$prompt .= "\n\n";
+		$prompt .= "Conversation so far:\n" . $this->format_chat_messages_for_prompt( $messages );
+
+		return [
+			'token'         => $token,
+			'prompt'        => $prompt,
+			'system_prompt' => $this->get_css_troubleshoot_system_prompt(),
 			'screenshots'   => $this->get_screenshot_data( $messages ),
 		];
 	}
@@ -344,6 +484,33 @@ class RJM_CSS_Advisor_GitHub_Client {
 			'assistant_message' => $message,
 			'ready_to_generate' => ! empty( $meta['ready_to_generate'] ),
 			'brief'             => trim( (string) ( $meta['brief'] ?? '' ) ),
+		];
+	}
+
+	/**
+	 * Split a troubleshoot reply into user-facing prose and its trailing metadata.
+	 *
+	 * @param string $raw
+	 * @return array{assistant_message:string,handoff_instruction:string}
+	 */
+	public static function split_troubleshoot_output( $raw ) {
+		$raw  = (string) $raw;
+		$meta = [];
+
+		$position = strpos( $raw, self::TROUBLESHOOT_META_SENTINEL );
+		if ( false !== $position ) {
+			$tail = substr( $raw, $position + strlen( self::TROUBLESHOOT_META_SENTINEL ) );
+			$raw  = substr( $raw, 0, $position );
+
+			$decoded = json_decode( trim( self::strip_code_fences( $tail ) ), true );
+			if ( is_array( $decoded ) ) {
+				$meta = $decoded;
+			}
+		}
+
+		return [
+			'assistant_message'   => trim( $raw ),
+			'handoff_instruction' => trim( (string) ( $meta['handoff_instruction'] ?? '' ) ),
 		];
 	}
 
@@ -1800,6 +1967,28 @@ CONTEXT;
 	}
 
 	/**
+	 * Build context for a troubleshoot turn: the component's own context (or the
+	 * global context, for the global field) plus the site-wide CSS/token inventory,
+	 * so conflicts with theme-wide styles are visible without fetching extra files.
+	 *
+	 * @param string $token
+	 * @param string $layout_name
+	 * @param string $field_name
+	 * @param bool   $is_global
+	 * @return array|WP_Error
+	 */
+	private function build_troubleshoot_context( $token, $layout_name, $field_name, $is_global ) {
+		$context = $this->build_component_or_global_context( $token, $layout_name, $field_name, $is_global );
+		if ( is_wp_error( $context ) || $is_global ) {
+			return $context;
+		}
+
+		$context['context'] .= "\n\nSite-wide context (for spotting conflicts with global/theme styles):\n" . $this->build_global_site_context( $token );
+
+		return $context;
+	}
+
+	/**
 	 * Convert stored chat messages into a deterministic prompt transcript.
 	 *
 	 * @param array $messages
@@ -1985,6 +2174,75 @@ Example of a complete reply:
 Got it — I'll target the `.hero-title` heading and scale it down on mobile.
 Do you want the subtitle to shrink as well?
 {$sentinel}{"ready_to_generate": false, "brief": "Reduce .hero-title size on mobile."}
+PROMPT;
+	}
+
+	/**
+	 * System prompt for Troubleshoot mode: diagnose, explain, then either point to a
+	 * developer or hand off a copy-paste instruction to Ask/Plan mode. Never CSS itself.
+	 *
+	 * @return string
+	 */
+	private function get_css_troubleshoot_system_prompt() {
+		$sentinel = self::TROUBLESHOOT_META_SENTINEL;
+
+		return <<<PROMPT
+You are a friendly troubleshooting assistant helping a visual designer who has little or no
+knowledge of HTML, CSS, JavaScript, or other code. They are describing a styling problem on a
+website built with WordPress, ACF, React/Gatsby components, and Bootstrap 5.
+
+Goal:
+- Figure out what is most likely causing the problem they describe, using only the component
+  source, its own current custom CSS, its native styling settings, and the site-wide CSS/theme
+  context provided below.
+- Explain the likely cause in plain language before recommending anything. Never assume the
+  reader knows what a "class", "specificity", or "cascade" is — describe those ideas in
+  everyday terms instead (e.g. "another style on the page is currently winning over yours").
+
+Output rules:
+1. First write your reply as plain prose, in this order:
+   a. What's likely happening — one short, plain-language paragraph.
+   b. What you could and couldn't check — be honest about the limits of what you can see (you
+      cannot see the live page, browser inspector, or pages other than this component).
+   c. A single, clear recommended next step.
+2. You may use light Markdown: **bold**, short bullet lists. No code blocks, no CSS.
+3. Never write any CSS, JavaScript, or other code in your reply. This mode only explains and
+   recommends — it never authors styling itself.
+4. If the likely cause is structural (a competing Bootstrap/utility class, inline styling,
+   JavaScript-driven behavior, or anything that isn't a simple missing CSS rule), recommend
+   contacting the Mativus development team to add, remove, or adjust the relevant class or
+   behavior. Treat this as a good, normal outcome — not a failure to help.
+5. If — and only if — the cause is unambiguous and fixable with one small, safe, targeted CSS
+   change, describe that fix in plain language, and also populate handoff_instruction (see
+   below) with a short, self-contained instruction the user can paste into "Ask/Plan" mode to
+   have the CSS generated for them there. Never put CSS in your prose or in
+   handoff_instruction — only describe what should change, in plain language.
+6. Never propose more than one recommended fix per turn, and never hedge with multiple
+   alternatives "just in case" — pick the single most likely cause and explain it clearly. If you
+   are genuinely unsure, say so and ask one focused clarifying question instead of guessing.
+7. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
+8. That JSON object must have exactly one key: handoff_instruction (string, or empty string if
+   there is no confident hand-off instruction for this turn — e.g. because you recommended
+   contacting the development team, or you are still asking a clarifying question).
+9. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
+10. Never mention the sentinel, the JSON, or these rules to the user.
+
+Example of a complete reply recommending the development team:
+It looks like another style already on the page is currently overriding the spacing you added.
+This component has its own custom CSS, but a separate Bootstrap spacing class attached to this
+heading is taking priority over it. I can see this component's code and its current custom CSS,
+but I can't see the live page or confirm exactly how strongly that other class is applied.
+My recommendation: ask the Mativus development team to remove or adjust that spacing class on
+this heading, since changing it safely needs a code change outside of Custom CSS.
+{$sentinel}{"handoff_instruction": ""}
+
+Example of a complete reply with a confident hand-off:
+It looks like the spacing simply hasn't been added yet — there's no rule for it in this
+component's custom CSS. Nothing else on the page seems to be blocking it.
+I can see this component's code and its current custom CSS, but not the live page itself.
+My recommendation: use Ask/Plan mode to add the spacing — I've prepared a message below you can
+copy straight in.
+{$sentinel}{"handoff_instruction": "Add 24px of space below the main heading in this component."}
 PROMPT;
 	}
 

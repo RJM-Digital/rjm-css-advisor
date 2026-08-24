@@ -784,7 +784,8 @@ body.rjm-css-advisor-locked {
 
 .rjm-css-mode-menu[data-mode='generate'] .rjm-css-mode-icon[data-mode='generate'],
 .rjm-css-mode-menu[data-mode='ask'] .rjm-css-mode-icon[data-mode='ask'],
-.rjm-css-mode-menu[data-mode='build'] .rjm-css-mode-icon[data-mode='build'] {
+.rjm-css-mode-menu[data-mode='build'] .rjm-css-mode-icon[data-mode='build'],
+.rjm-css-mode-menu[data-mode='troubleshoot'] .rjm-css-mode-icon[data-mode='troubleshoot'] {
 	display: block;
 }
 
@@ -1170,6 +1171,34 @@ body.rjm-css-advisor-locked {
 	font-size: 12px;
 	margin: 0;
 	padding: 8px 10px;
+}
+
+/* Deliberately distinct from chat prose and code blocks: this is an instruction to hand off, not a chat reply or CSS. */
+.rjm-troubleshoot-handoff {
+	background: #fef8ee;
+	border: 1px solid #e8c27a;
+	border-radius: 8px;
+	margin-top: 10px;
+	padding: 10px 12px;
+}
+
+.rjm-troubleshoot-handoff-label {
+	color: #8a5a00;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	margin: 0 0 4px;
+	text-transform: uppercase;
+}
+
+.rjm-troubleshoot-handoff-text {
+	color: #43331a;
+	margin: 0 0 10px;
+	white-space: pre-wrap;
+}
+
+.rjm-troubleshoot-handoff-btn {
+	font-size: 12px;
 }
 
 .rjm-build-step-card {

@@ -84,6 +84,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 				'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
 				'nonce'     => wp_create_nonce( 'rjm_css_advisor' ),
 				'streamUrl' => rest_url( RJM_CSS_Advisor_Ajax_Handler::REST_NAMESPACE . '/plan-stream' ),
+				'troubleshootStreamUrl' => rest_url( RJM_CSS_Advisor_Ajax_Handler::REST_NAMESPACE . '/troubleshoot-stream' ),
 				'restNonce' => wp_create_nonce( 'wp_rest' ),
 				'postId'    => (int) get_the_ID(),
 				'locked'    => RJM_CSS_Advisor_Settings::is_css_edit_lock_active_for_current_user() ? 1 : 0,
@@ -95,6 +96,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'modeGenerate'    => __( 'Generate', 'rjm-css-advisor' ),
 					'modeAsk'         => __( 'Ask/Plan', 'rjm-css-advisor' ),
 					'modeBuild'       => __( 'Build', 'rjm-css-advisor' ),
+					'modeTroubleshoot' => __( 'Troubleshoot', 'rjm-css-advisor' ),
 					'generateBtn'     => __( 'Generate CSS ✨', 'rjm-css-advisor' ),
 					'sendPlanBtn'     => __( 'Send message', 'rjm-css-advisor' ),
 					'generatePlanBtn' => __( 'Generate CSS from plan', 'rjm-css-advisor' ),
@@ -135,10 +137,19 @@ class RJM_CSS_Advisor_ACF_Integration {
 					'emptyHintGenerate'  => __( 'Write one clear instruction and the CSS is generated in a single pass.', 'rjm-css-advisor' ),
 					'emptyTitleBuild'    => __( 'Describe what to build', 'rjm-css-advisor' ),
 					'emptyHintBuild'     => __( 'The work is split into small steps you can approve, revise, or skip.', 'rjm-css-advisor' ),
+					'emptyTitleTroubleshoot' => __( "Describe what doesn't look right", 'rjm-css-advisor' ),
+					'emptyHintTroubleshoot'  => __( "Explain what you're seeing in your own words — no CSS knowledge needed. This mode explains the likely cause before suggesting anything.", 'rjm-css-advisor' ),
+					'handoffLabel'       => __( 'Suggested next step', 'rjm-css-advisor' ),
+					'handoffUseBtn'      => __( 'Use in Ask/Plan', 'rjm-css-advisor' ),
 					'examplePrompts'    => [
 						__( 'Make the heading navy blue at 2rem', 'rjm-css-advisor' ),
 						__( 'Add more padding below this section on mobile', 'rjm-css-advisor' ),
 						__( 'Centre the buttons and add a hover effect', 'rjm-css-advisor' ),
+					],
+					'examplePromptsTroubleshoot' => [
+						__( "The spacing I added under this heading isn't showing up", 'rjm-css-advisor' ),
+						__( 'My colour change looks right in the field but not on the page', 'rjm-css-advisor' ),
+						__( "This button doesn't line up the way I expected", 'rjm-css-advisor' ),
 					],
 					'historyEmpty'       => __( 'No saved chats for this component yet.', 'rjm-css-advisor' ),
 					'historyUntitled'    => __( 'Untitled chat', 'rjm-css-advisor' ),
@@ -192,6 +203,7 @@ class RJM_CSS_Advisor_ACF_Integration {
 		$mode_generate_help = __( 'Generate mode creates CSS in one pass from your goal.', 'rjm-css-advisor' );
 		$mode_ask_help      = __( 'Ask/Plan mode lets you chat and refine requirements before generating final CSS.', 'rjm-css-advisor' );
 		$mode_build_help    = __( 'Build mode creates CSS step-by-step with approve, revise, or skip controls.', 'rjm-css-advisor' );
+		$mode_troubleshoot_help = __( "Troubleshoot mode explains what might be causing a styling problem, in plain language, before suggesting any fix.", 'rjm-css-advisor' );
 
 		?>
 		<div
@@ -319,15 +331,22 @@ class RJM_CSS_Advisor_ACF_Integration {
 														<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_build_help ); ?></span>
 													</span>
 												</label>
+										<label class="rjm-css-menu-option">
+											<input type="radio" name="<?php echo esc_attr( $mode_id ); ?>" class="rjm-css-mode-input" value="troubleshoot" />
+											<span class="rjm-css-menu-option-body">
+												<span class="rjm-css-menu-option-name"><?php esc_html_e( 'Troubleshoot', 'rjm-css-advisor' ); ?></span>
+												<span class="rjm-css-menu-option-help"><?php echo esc_html( $mode_troubleshoot_help ); ?></span>
+											</span>
+										</label>
 											</div>
-										</div>
+									</div>
 
-										<div class="rjm-css-menu rjm-css-breakpoint-menu rjm-css-breakpoints">
-											<button type="button" class="rjm-css-menu-btn" aria-haspopup="true" aria-expanded="false">
-												<span class="rjm-css-menu-icon" aria-hidden="true">
-													<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h5"/><path d="M8.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.5"/></svg>
-												</span>
-												<span class="rjm-css-menu-label"><?php esc_html_e( 'All breakpoints', 'rjm-css-advisor' ); ?></span>
+									<div class="rjm-css-menu rjm-css-breakpoint-menu rjm-css-breakpoints">
+										<button type="button" class="rjm-css-menu-btn" aria-haspopup="true" aria-expanded="false">
+											<span class="rjm-css-menu-icon" aria-hidden="true">
+												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h5"/><path d="M8.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.5"/></svg>
+											</span>
+											<span class="rjm-css-menu-label"><?php esc_html_e( 'All breakpoints', 'rjm-css-advisor' ); ?></span>
 												<span class="rjm-css-menu-caret" aria-hidden="true">▾</span>
 											</button>
 											<div class="rjm-css-menu-popover" aria-label="<?php esc_attr_e( 'Responsive breakpoints', 'rjm-css-advisor' ); ?>" hidden>

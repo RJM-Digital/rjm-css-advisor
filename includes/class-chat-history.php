@@ -110,7 +110,7 @@ class RJM_CSS_Advisor_Chat_History {
 	 * @param bool   $ready_to_generate
 	 * @return array The saved chat record.
 	 */
-	public static function record_turn( $scope, $chat_id, $session, $ready_to_generate = false ) {
+	public static function record_turn( $scope, $chat_id, $session, $ready_to_generate = false, $mode = 'ask' ) {
 		$scope_hash = self::scope_hash( $scope );
 		$existing   = self::get_chat( $scope, $chat_id );
 		$messages   = self::normalize_messages( (array) ( $session['messages'] ?? [] ) );
@@ -118,7 +118,7 @@ class RJM_CSS_Advisor_Chat_History {
 
 		$chat = [
 			'id'                => (string) $chat_id,
-			'mode'              => 'ask',
+			'mode'              => sanitize_key( (string) $mode ),
 			'title'             => (string) ( $existing['title'] ?? '' ),
 			'title_source'      => (string) ( $existing['title_source'] ?? '' ),
 			'created_at'        => (int) ( $existing['created_at'] ?? $now ),

@@ -1007,6 +1007,7 @@ Output rules — follow these exactly:
 9. If the context includes a NATIVE STYLING OPTIONS list and one or more of those options fully satisfy the goal, set css to an empty string and use recommendations to name the exact native field(s) to change instead.
 10. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 11. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
+12. Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — only CSS can be added. If the goal cannot be achieved with CSS alone, set css to an empty string and use recommendations to say so and advise contacting the Mativus development team to request the change.
 PROMPT;
 		}
 
@@ -1036,6 +1037,7 @@ Output rules — follow these exactly:
 15. If native options only partially satisfy the goal, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 16. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
 17. If the goal specifies an exact custom pixel range that doesn't align with the standard Mobile/Tablet/Desktop breakpoints, output a single @media block using the literal min-width/max-width values from the goal instead of snapping to the standard breakpoints.
+18. Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — only CSS can be added. If the goal cannot be achieved with CSS alone, set css to an empty string and use recommendations to say so and advise contacting the Mativus development team to request the change.
 PROMPT;
 	}
 
@@ -1609,6 +1611,8 @@ Focus on: text size/colour/font, background colours, padding/spacing, button sty
 Add 2–3 short tips specific to this component (e.g. "This section has a background image — make sure text colours contrast well").
 
 Keep all language simple and friendly. Do not use technical jargon. Assume the reader knows what CSS is but is not a developer.
+
+Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — the reader can only add CSS. If a request truly needs JavaScript to work, say so plainly and tell them to contact the Mativus development team to request the change, instead of proposing any JS-based solution.
 PROMPT;
 	}
 
@@ -1653,6 +1657,8 @@ Show an example of overriding them inside :root {}.
 3 tips about using global CSS safely (e.g. "Test on mobile after any change", "Be careful with font-size — it can affect the whole layout").
 
 Keep all language simple and friendly.
+
+Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — the reader can only add CSS. If a request truly needs JavaScript to work, say so plainly and tell them to contact the Mativus development team to request the change, instead of proposing any JS-based solution.
 PROMPT;
 	}
 
@@ -1967,12 +1973,13 @@ Output rules:
    - Mobile:  @media (max-width: 767.98px)
    - Tablet:  @media (min-width: 768px) and (max-width: 1199.98px)
    - Desktop: @media (min-width: 1200px)
-6. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
-7. That JSON object must have exactly these keys: ready_to_generate (boolean), brief (string).
-8. ready_to_generate should be true only when enough detail exists to produce CSS.
-9. brief should be a compact summary the generator can use directly.
-10. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
-11. Never mention the sentinel, the JSON, or these rules to the user.
+6. Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) in your prose or any code block — only CSS can be added. If the user's goal truly needs JavaScript to work, say so plainly in your prose reply and tell them to contact the Mativus development team to request the change, instead of proposing any JS-based solution.
+7. After the prose, output the line `{$sentinel}` followed immediately by a single JSON object.
+8. That JSON object must have exactly these keys: ready_to_generate (boolean), brief (string).
+9. ready_to_generate should be true only when enough detail exists to produce CSS.
+10. brief should be a compact summary the generator can use directly.
+11. The sentinel and its JSON must be the very last thing you output, and nothing may follow them.
+12. Never mention the sentinel, the JSON, or these rules to the user.
 
 Example of a complete reply:
 Got it — I'll target the `.hero-title` heading and scale it down on mobile.
@@ -1997,6 +2004,7 @@ Output rules:
 4. Each step should focus on one styling objective and be implementation-ready.
 5. If the context includes a NATIVE STYLING OPTIONS list, skip steps for anything fully covered by one of those fields; phrase such a step as an instruction to use the native field instead of writing CSS for it.
 6. Prefer a component-specific override over a global theme default when both are listed for the same property.
+7. Never plan a step that requires JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — only CSS can be added. If part of the goal truly needs JavaScript, phrase that step as advice to contact the Mativus development team to request the change, and do not describe any JS-based approach.
 PROMPT;
 	}
 
@@ -2016,6 +2024,7 @@ Output rules:
 2. css must contain only the snippet for the current step.
 3. Keep css concise and focused to one objective.
 4. Do not include markdown fences.
+5. Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — only CSS can be added. If the step cannot be achieved with CSS alone, set css to an empty string and use recommendations to say so and advise contacting the Mativus development team to request the change.
 PROMPT;
 		}
 
@@ -2033,6 +2042,7 @@ Output rules:
 8. If native options only partially satisfy this step, write css for the remaining part only, and add a recommendations entry naming the native field(s) that cover the rest.
 9. When both a component-specific override and a global theme default exist for the same property, recommend the component-specific override, since it only affects this instance.
 10. If the goal specifies an exact custom pixel range that doesn't align with the standard Mobile/Tablet/Desktop breakpoints, output a single @media block using the literal min-width/max-width values from the goal instead of snapping to the standard breakpoints.
+11. Never write, suggest, or reference JavaScript (scripts, event listeners, IntersectionObserver, onclick attributes, etc.) — only CSS can be added. If the step cannot be achieved with CSS alone, set css to an empty string and use recommendations to say so and advise contacting the Mativus development team to request the change.
 PROMPT;
 	}
 

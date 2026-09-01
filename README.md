@@ -34,7 +34,8 @@ All settings are entered through the WordPress admin interface. **Nothing needs 
 You need a **GitHub Fine-Grained Personal Access Token** that:
 
 - Has **Contents: Read-only** access on the repository containing your ACF component source (e.g. `RJM-Digital/import-template-coach`).
-- Belongs to a GitHub account that has a **Copilot Business seat** in the RJM Digital organisation.
+- Belongs to a GitHub account that can read the selected repository.
+- Has a **Copilot Business seat** only when GitHub Copilot is selected as the AI provider.
 
 #### How to create the token:
 
@@ -48,6 +49,21 @@ You need a **GitHub Fine-Grained Personal Access Token** that:
 4. Click **Generate token** and paste it into the plugin settings.
 
 > ⚠️ **The token is stored encrypted** using your site's WordPress `AUTH_KEY`. It is never logged or transmitted anywhere except to GitHub and Copilot/OpenAI APIs.
+
+### OpenAI Responses API
+
+Select **OpenAI API** to use OpenAI's Responses API for CSS advice, planning, troubleshooting, screenshot analysis, and generation. Add an OpenAI API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys). The GitHub PAT is still required because component source is fetched from GitHub before each AI request.
+
+The default OpenAI model is **GPT-5.6**. The available alternatives are:
+
+- **GPT-5.6 Terra** for a lower-cost balance of quality and speed.
+- **GPT-5.6 Luna** for faster, higher-volume work.
+- **GPT-5.5** as a previous-generation fallback.
+- **GPT-4o** as a legacy fallback.
+
+OpenAI reasoning effort defaults to **Medium** for GPT-5 models. Lower effort reduces latency and token cost; higher effort can improve difficult component analysis but may take substantially longer. GPT-4o does not use this setting. OpenAI responses are sent with API storage disabled because WordPress owns the plugin's conversation history.
+
+GitHub Copilot retains its own model setting and continues to use the Copilot Chat Completions API. Switching providers does not overwrite the other provider's model selection.
 
 ---
 

@@ -102,8 +102,24 @@ class RJM_CSS_Advisor_Settings {
 
 		add_settings_field(
 			'copilot_model',
-			__( 'AI Model', 'rjm-css-advisor' ),
-			[ __CLASS__, 'render_field_model' ],
+			__( 'Copilot Model', 'rjm-css-advisor' ),
+			[ __CLASS__, 'render_field_copilot_model' ],
+			self::PAGE_SLUG,
+			'rjm_css_advisor_main'
+		);
+
+		add_settings_field(
+			'openai_model',
+			__( 'OpenAI Model', 'rjm-css-advisor' ),
+			[ __CLASS__, 'render_field_openai_model' ],
+			self::PAGE_SLUG,
+			'rjm_css_advisor_main'
+		);
+
+		add_settings_field(
+			'openai_reasoning_effort',
+			__( 'OpenAI Reasoning Effort', 'rjm-css-advisor' ),
+			[ __CLASS__, 'render_field_openai_reasoning_effort' ],
 			self::PAGE_SLUG,
 			'rjm_css_advisor_main'
 		);
@@ -206,7 +222,18 @@ class RJM_CSS_Advisor_Settings {
 		$default_branch         = defined( 'RJM_CSS_ADVISOR_BRANCH' ) ? RJM_CSS_ADVISOR_BRANCH : 'main';
 		$clean['github_repo']   = sanitize_text_field( $input['github_repo'] ?? $default_repo );
 		$clean['github_branch'] = sanitize_text_field( $input['github_branch'] ?? $default_branch );
-		$clean['copilot_model'] = sanitize_text_field( $input['copilot_model'] ?? 'gpt-4o' );
+
+		$allowed_copilot_models = [ 'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'claude-3.5-sonnet', 'o1-mini' ];
+		$copilot_model = sanitize_text_field( $input['copilot_model'] ?? 'gpt-4o' );
+		$clean['copilot_model'] = in_array( $copilot_model, $allowed_copilot_models, true ) ? $copilot_model : 'gpt-4o';
+
+		$allowed_openai_models = [ 'gpt-5.6', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-4o' ];
+		$openai_model = sanitize_text_field( $input['openai_model'] ?? 'gpt-5.6' );
+		$clean['openai_model'] = in_array( $openai_model, $allowed_openai_models, true ) ? $openai_model : 'gpt-5.6';
+
+		$allowed_reasoning_efforts = [ 'none', 'low', 'medium', 'high', 'xhigh' ];
+		$reasoning_effort = sanitize_key( $input['openai_reasoning_effort'] ?? 'medium' );
+		$clean['openai_reasoning_effort'] = in_array( $reasoning_effort, $allowed_reasoning_efforts, true ) ? $reasoning_effort : 'medium';
 		$clean['cache_ttl']     = max( 1, intval( $input['cache_ttl'] ?? 60 ) );
 		$clean['debug_logging_enabled'] = ! empty( $input['debug_logging_enabled'] ) ? '1' : '0';
 		$clean['disable_css_edit_access'] = ! empty( $input['disable_css_edit_access'] ) ? '1' : '0';
@@ -437,31 +464,62 @@ class RJM_CSS_Advisor_Settings {
 		<?php endif; ?>
 		<script>
 		(function() {
-			// Hide/show this row based on the current provider selection.
-			function rjmSyncOpenAIRow() {
+			function rjmSyncProviderRows() {
 				var sel = document.getElementById('rjm_ai_provider');
-				var row = document.getElementById('rjm_openai_key_row');
-				if (sel && row) {
-					row.style.display = (sel.value === 'openai') ? '' : 'none';
+				var openAIModel = document.getElementById('rjm_openai_model');
+				var reasoning = document.getElementById('rjm_openai_reasoning_effort');
+				if (!sel) {
+					return;
+				}
+
+				var openAIRows = document.querySelectorAll('.rjm-openai-setting-row');
+				var copilotRows = document.querySelectorAll('.rjm-copilot-setting-row');
+				var isOpenAI = sel.value === 'openai';
+				var index;
+				for (index = 0; index < openAIRows.length; index++) {
+					openAIRows[index].style.display = isOpenAI ? '' : 'none';
+				}
+				for (index = 0; index < copilotRows.length; index++) {
+					copilotRows[index].style.display = isOpenAI ? 'none' : '';
+				}
+
+				if (reasoning) {
+					var reasoningRow = reasoning.closest('tr');
+					if (reasoningRow) {
+						reasoningRow.style.display = isOpenAI && (!openAIModel || openAIModel.value !== 'gpt-4o') ? '' : 'none';
+					}
 				}
 			}
-			// Mark the parent <tr> so we can target it.
+
 			document.addEventListener('DOMContentLoaded', function() {
-				var input = document.getElementById('rjm_openai_api_key');
-				if (input) {
-					var tr = input.closest('tr');
-					if (tr) { tr.id = 'rjm_openai_key_row'; }
-				}
-				rjmSyncOpenAIRow();
 				var sel = document.getElementById('rjm_ai_provider');
-				if (sel) { sel.addEventListener('change', rjmSyncOpenAIRow); }
+				var openAIIds = ['rjm_openai_api_key', 'rjm_openai_model', 'rjm_openai_reasoning_effort'];
+				var copilotIds = ['rjm_copilot_model'];
+				openAIIds.forEach(function(id) {
+					var field = document.getElementById(id);
+					var row = field ? field.closest('tr') : null;
+					if (row) { row.classList.add('rjm-openai-setting-row'); }
+				});
+				copilotIds.forEach(function(id) {
+					var field = document.getElementById(id);
+					var row = field ? field.closest('tr') : null;
+					if (row) { row.classList.add('rjm-copilot-setting-row'); }
+				});
+				rjmSyncProviderRows();
+				if (sel) {
+					sel.addEventListener('change', rjmSyncProviderRows);
+				}
+				var openAIModel = document.getElementById('rjm_openai_model');
+				if (openAIModel) {
+					openAIModel.addEventListener('change', rjmSyncProviderRows);
+				}
 			});
 		})();
 		</script>
 		<?php
 	}
 
-	public static function render_field_model() {
+	public static function render_field_copilot_model() {
 		$settings = self::get_settings();
 		$value    = $settings['copilot_model'] ?? 'gpt-4o';
 		$models   = [
@@ -473,14 +531,58 @@ class RJM_CSS_Advisor_Settings {
 			'o1-mini'             => 'o1 mini (Copilot only)',
 		];
 		?>
-		<select name="<?php echo esc_attr( self::OPTION_KEY ); ?>[copilot_model]">
+		<select id="rjm_copilot_model" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[copilot_model]">
 			<?php foreach ( $models as $model_id => $model_label ) : ?>
 				<option value="<?php echo esc_attr( $model_id ); ?>" <?php selected( $value, $model_id ); ?>>
 					<?php echo esc_html( $model_label ); ?>
 				</option>
 			<?php endforeach; ?>
 		</select>
-		<p class="description"><?php esc_html_e( 'The AI model used to generate CSS advice. GPT-4o works with both GitHub Copilot and OpenAI. Models marked "(Copilot only)" are not available via the OpenAI API.', 'rjm-css-advisor' ); ?></p>
+		<p class="description"><?php esc_html_e( 'The model used when GitHub Copilot Business is selected.', 'rjm-css-advisor' ); ?></p>
+		<?php
+	}
+
+	public static function render_field_openai_model() {
+		$settings = self::get_settings();
+		$value    = $settings['openai_model'] ?? 'gpt-5.6';
+		$models   = [
+			'gpt-5.6'       => 'GPT-5.6 (recommended)',
+			'gpt-5.6-terra' => 'GPT-5.6 Terra (balanced cost)',
+			'gpt-5.6-luna'  => 'GPT-5.6 Luna (faster, lower cost)',
+			'gpt-5.5'       => 'GPT-5.5',
+			'gpt-4o'        => 'GPT-4o (legacy fallback)',
+		];
+		?>
+		<select id="rjm_openai_model" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[openai_model]">
+			<?php foreach ( $models as $model_id => $model_label ) : ?>
+				<option value="<?php echo esc_attr( $model_id ); ?>" <?php selected( $value, $model_id ); ?>>
+					<?php echo esc_html( $model_label ); ?>
+				</option>
+			<?php endforeach; ?>
+		</select>
+		<p class="description"><?php esc_html_e( 'OpenAI requests use the Responses API. GPT-5.6 provides the strongest default balance for CSS planning and generation.', 'rjm-css-advisor' ); ?></p>
+		<?php
+	}
+
+	public static function render_field_openai_reasoning_effort() {
+		$settings = self::get_settings();
+		$value    = $settings['openai_reasoning_effort'] ?? 'medium';
+		$efforts  = [
+			'none'   => __( 'None (lowest latency)', 'rjm-css-advisor' ),
+			'low'    => __( 'Low', 'rjm-css-advisor' ),
+			'medium' => __( 'Medium (recommended)', 'rjm-css-advisor' ),
+			'high'   => __( 'High', 'rjm-css-advisor' ),
+			'xhigh'  => __( 'Extra high (slowest, highest cost)', 'rjm-css-advisor' ),
+		];
+		?>
+		<select id="rjm_openai_reasoning_effort" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[openai_reasoning_effort]">
+			<?php foreach ( $efforts as $effort_id => $effort_label ) : ?>
+				<option value="<?php echo esc_attr( $effort_id ); ?>" <?php selected( $value, $effort_id ); ?>>
+					<?php echo esc_html( $effort_label ); ?>
+				</option>
+			<?php endforeach; ?>
+		</select>
+		<p class="description"><?php esc_html_e( 'Higher effort can improve difficult CSS analysis but increases response time and token cost.', 'rjm-css-advisor' ); ?></p>
 		<?php
 	}
 
@@ -586,9 +688,9 @@ class RJM_CSS_Advisor_Settings {
 		if ( $provider === 'openai' ) {
 			$has_openai_key = ! empty( $settings['openai_key_encrypted'] );
 			if ( $has_openai_key ) {
-				echo '<p style="color:#00a32a;">✓ ' . esc_html__( 'AI provider: OpenAI API — key saved.', 'rjm-css-advisor' ) . '</p>';
+				echo '<p style="color:#00a32a;">✓ ' . esc_html__( 'AI provider: OpenAI Responses API — key saved.', 'rjm-css-advisor' ) . '</p>';
 			} else {
-				echo '<p style="color:#d63638;">⚠ ' . esc_html__( 'AI provider: OpenAI API — no API key saved. Please add your OpenAI API key above.', 'rjm-css-advisor' ) . '</p>';
+				echo '<p style="color:#d63638;">⚠ ' . esc_html__( 'AI provider: OpenAI Responses API — no API key saved. Please add your OpenAI API key above.', 'rjm-css-advisor' ) . '</p>';
 			}
 		} else {
 			echo '<p style="color:#00a32a;">✓ ' . esc_html__( 'AI provider: GitHub Copilot Business.', 'rjm-css-advisor' ) . '</p>';
@@ -618,6 +720,11 @@ class RJM_CSS_Advisor_Settings {
 			<br />
 			<strong><?php esc_html_e( 'AI provider/model:', 'rjm-css-advisor' ); ?></strong>
 			<?php echo esc_html( self::get_ai_provider() . ' / ' . self::get_model() ); ?>
+			<?php if ( 'openai' === self::get_ai_provider() ) : ?>
+				<br />
+				<strong><?php esc_html_e( 'OpenAI reasoning effort:', 'rjm-css-advisor' ); ?></strong>
+				<?php echo esc_html( self::get_openai_reasoning_effort() ); ?>
+			<?php endif; ?>
 		</p>
 		<form method="post" style="margin: 12px 0 18px;">
 			<?php wp_nonce_field( 'rjm_css_advisor_clear_debug_logs' ); ?>
@@ -798,7 +905,17 @@ class RJM_CSS_Advisor_Settings {
 
 	public static function get_model() {
 		$settings = self::get_settings();
+		if ( 'openai' === self::get_ai_provider() ) {
+			return $settings['openai_model'] ?? 'gpt-5.6';
+		}
+
 		return $settings['copilot_model'] ?? 'gpt-4o';
+	}
+
+	public static function get_openai_reasoning_effort() {
+		$settings = self::get_settings();
+		$effort   = $settings['openai_reasoning_effort'] ?? 'medium';
+		return in_array( $effort, [ 'none', 'low', 'medium', 'high', 'xhigh' ], true ) ? $effort : 'medium';
 	}
 
 	public static function get_cache_ttl() {

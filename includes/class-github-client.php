@@ -119,7 +119,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$user_message .= $existing_css_block;
 		$system_prompt = $this->get_css_generator_system_prompt( $is_global );
 
-		$css = $this->call_copilot_with_context( $token, 'CSS Generator', $user_message, $system_prompt, $screenshot_data );
+		$css = $this->call_copilot_with_context( $token, 'CSS Generator', $user_message, $system_prompt, $screenshot_data, 'css' );
 
 		if ( is_wp_error( $css ) ) {
 			$this->log_debug_error( 'generate_css', $css, [
@@ -236,7 +236,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$system = 'You name CSS styling chats. Reply with a title of at most six words describing the styling task. '
 			. 'Use plain text only: no quotes, no punctuation at the end, no markdown, no preamble.';
 
-		$title = $this->call_copilot_with_context( $token, 'Chat Title', $prompt, $system );
+		$title = $this->call_copilot_with_context( $token, 'Chat Title', $prompt, $system, [], 'title' );
 
 		if ( is_wp_error( $title ) ) {
 			return $title;
@@ -558,7 +558,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 			$token,
 			'CSS Build Planner',
 			$message,
-			$this->get_css_build_planner_system_prompt()
+			$this->get_css_build_planner_system_prompt(),
+			[],
+			'build_plan'
 		);
 
 		if ( is_wp_error( $raw ) ) {
@@ -639,7 +641,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$user_message .= $this->build_existing_css_context_block( $existing_css_context );
 
 		$system_prompt = $this->get_css_builder_system_prompt( $is_global );
-		$raw = $this->call_copilot_with_context( $token, 'CSS Build Step', $user_message, $system_prompt );
+		$raw = $this->call_copilot_with_context( $token, 'CSS Build Step', $user_message, $system_prompt, [], 'css' );
 
 		if ( is_wp_error( $raw ) ) {
 			$this->log_debug_error( 'generate_css_build_step', $raw, [
@@ -682,7 +684,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return new WP_Error( 'unknown_layout', sprintf( __( 'No component mapping found for layout "%s".', 'rjm-css-advisor' ), $layout_name ) );
 		}
 
-		$cache_key = 'rjm_css_' . sha1( $layout_name . '|' . $field_name );
+		$cache_key = 'rjm_css_' . sha1( $layout_name . '|' . $field_name . '|' . $this->get_ai_cache_discriminator() );
 		$cached    = get_transient( $cache_key );
 
 		// We store [ advice, etag ] in the transient.
@@ -755,6 +757,20 @@ class RJM_CSS_Advisor_GitHub_Client {
 	// Private helpers
 	// -------------------------------------------------------------------------
 
+	private function get_ai_cache_discriminator() {
+		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
+		$parts    = [ $provider, RJM_CSS_Advisor_Settings::get_model() ];
+
+		if ( 'openai' === $provider ) {
+			$parts[] = 'responses';
+			$parts[] = RJM_CSS_Advisor_Settings::get_openai_reasoning_effort();
+		} else {
+			$parts[] = 'chat-completions';
+		}
+
+		return implode( '|', $parts );
+	}
+
 	/**
 	 * Fetch a single file from GitHub Contents API.
 	 *
@@ -816,7 +832,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * Generate global-CSS advice (no component file — describes all global selectors).
 	 */
 	private function get_global_advice( $token ) {
-		$cache_key = 'rjm_css_global';
+		$cache_key = 'rjm_css_global_' . sha1( $this->get_ai_cache_discriminator() );
 		$cached    = get_transient( $cache_key );
 
 		if ( $cached ) {
@@ -865,43 +881,119 @@ class RJM_CSS_Advisor_GitHub_Client {
 	 * Make the actual AI chat/completions API request.
 	 * Routes to OpenAI or GitHub Copilot depending on the saved ai_provider setting.
 	 */
-	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = [] ) {
+	private function call_copilot_with_context( $token, $label, $user_message, $system_prompt, $screenshot_data = [], $response_profile = 'text' ) {
 		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
-		$body     = wp_json_encode( $this->build_chat_payload( $user_message, $system_prompt, $screenshot_data ) );
 
 		if ( $provider === 'openai' ) {
+			$body = wp_json_encode( $this->build_openai_responses_payload( $user_message, $system_prompt, $screenshot_data, $response_profile ) );
 			return $this->call_openai( $body );
 		}
 
+		$body = wp_json_encode( $this->build_copilot_chat_payload( $user_message, $system_prompt, $screenshot_data ) );
 		return $this->call_copilot_api( $token, $body );
 	}
 
 	/**
-	 * Assemble the OpenAI-compatible request payload shared by the blocking and streaming paths.
+	 * Assemble a Chat Completions payload for GitHub Copilot.
 	 */
-	private function build_chat_payload( $user_message, $system_prompt, $screenshot_data = [] ) {
-		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
-		$model    = RJM_CSS_Advisor_Settings::get_model();
+	private function build_copilot_chat_payload( $user_message, $system_prompt, $screenshot_data = [] ) {
 		$screenshot_data = is_array( $screenshot_data ) ? array_values( array_filter( $screenshot_data ) ) : ( $screenshot_data ? [ $screenshot_data ] : [] );
 		$user_content = $user_message;
-		if ( $screenshot_data && 'openai' === $provider ) {
-			$user_content = [
-				[ 'type' => 'text', 'text' => $user_message ],
-			];
-			foreach ( array_slice( $screenshot_data, 0, 10 ) as $image_data ) {
-				$user_content[] = [ 'type' => 'image_url', 'image_url' => [ 'url' => $image_data, 'detail' => 'auto' ] ];
-			}
-		} elseif ( $screenshot_data ) {
+		if ( $screenshot_data ) {
 			$user_content .= "\n\nNote: " . count( $screenshot_data ) . " screenshot(s) are attached, but this provider cannot inspect images. Do not claim to have analyzed them; ask the user to describe the visual details in text.";
 		}
 
 		return [
-			'model'    => $model,
+			'model'    => RJM_CSS_Advisor_Settings::get_model(),
 			'messages' => [
 				[ 'role' => 'system', 'content' => $system_prompt ],
 				[ 'role' => 'user',   'content' => $user_content  ],
 			],
 		];
+	}
+
+	/**
+	 * Assemble an OpenAI Responses API payload.
+	 */
+	private function build_openai_responses_payload( $user_message, $system_prompt, $screenshot_data = [], $response_profile = 'text' ) {
+		$model = RJM_CSS_Advisor_Settings::get_model();
+		$screenshot_data = is_array( $screenshot_data ) ? array_values( array_filter( $screenshot_data ) ) : ( $screenshot_data ? [ $screenshot_data ] : [] );
+		$user_content = [
+			[ 'type' => 'input_text', 'text' => $user_message ],
+		];
+
+		foreach ( array_slice( $screenshot_data, 0, 10 ) as $image_data ) {
+			$user_content[] = [
+				'type'      => 'input_image',
+				'image_url' => $image_data,
+				'detail'    => 'auto',
+			];
+		}
+
+		$payload = [
+			'model'             => $model,
+			'instructions'      => $system_prompt,
+			'input'             => [
+				[ 'role' => 'user', 'content' => $user_content ],
+			],
+			'max_output_tokens' => 'title' === $response_profile ? 5000 : 25000,
+			'store'             => false,
+		];
+
+		if ( 0 === strpos( $model, 'gpt-5.' ) ) {
+			$payload['reasoning'] = [ 'effort' => RJM_CSS_Advisor_Settings::get_openai_reasoning_effort() ];
+			$payload['text']      = [ 'verbosity' => 'low' ];
+		}
+
+		$format = $this->get_openai_response_format( $response_profile );
+		if ( $format ) {
+			$payload['text'] = array_merge( $payload['text'] ?? [], [ 'format' => $format ] );
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * Return a strict Responses API output schema for fully structured calls.
+	 */
+	private function get_openai_response_format( $response_profile ) {
+		if ( 'css' === $response_profile ) {
+			return [
+				'type'   => 'json_schema',
+				'name'   => 'css_advisor_result',
+				'strict' => true,
+				'schema' => [
+					'type'                 => 'object',
+					'properties'           => [
+						'css'                 => [ 'type' => 'string' ],
+						'explanation'         => [ 'type' => 'string' ],
+						'follow_up_questions' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ],
+						'recommendations'     => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ],
+					],
+					'required'             => [ 'css', 'explanation', 'follow_up_questions', 'recommendations' ],
+					'additionalProperties' => false,
+				],
+			];
+		}
+
+		if ( 'build_plan' === $response_profile ) {
+			return [
+				'type'   => 'json_schema',
+				'name'   => 'css_build_plan',
+				'strict' => true,
+				'schema' => [
+					'type'                 => 'object',
+					'properties'           => [
+						'title' => [ 'type' => 'string' ],
+						'steps' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ],
+					],
+					'required'             => [ 'title', 'steps' ],
+					'additionalProperties' => false,
+				],
+			];
+		}
+
+		return null;
 	}
 
 	/**
@@ -919,7 +1011,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$provider = RJM_CSS_Advisor_Settings::get_ai_provider();
-		$payload  = $this->build_chat_payload( $user_message, $system_prompt, $screenshot_data );
+		$payload  = 'openai' === $provider
+			? $this->build_openai_responses_payload( $user_message, $system_prompt, $screenshot_data )
+			: $this->build_copilot_chat_payload( $user_message, $system_prompt, $screenshot_data );
 		$payload['stream'] = true;
 
 		if ( 'openai' === $provider ) {
@@ -927,7 +1021,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			if ( ! $key ) {
 				return new WP_Error( 'no_openai_key', __( 'No OpenAI API key configured. Please visit Settings → RJM CSS Advisor and add your OpenAI key.', 'rjm-css-advisor' ) );
 			}
-			$url     = self::OPENAI_API_BASE . '/chat/completions';
+			$url     = self::OPENAI_API_BASE . '/responses';
 			$headers = [
 				'Authorization: Bearer ' . $key,
 				'Content-Type: application/json',
@@ -946,7 +1040,9 @@ class RJM_CSS_Advisor_GitHub_Client {
 
 		$full    = '';
 		$buffer  = '';
+		$raw_response = '';
 		$aborted = false;
+		$stream_error = null;
 
 		$handle = curl_init( $url );
 		curl_setopt_array( $handle, [
@@ -956,9 +1052,10 @@ class RJM_CSS_Advisor_GitHub_Client {
 			CURLOPT_RETURNTRANSFER => false,
 			CURLOPT_CONNECTTIMEOUT => 15,
 			CURLOPT_TIMEOUT        => 180,
-			CURLOPT_WRITEFUNCTION  => function ( $curl, $chunk ) use ( &$full, &$buffer, &$aborted, $on_progress ) {
+			CURLOPT_WRITEFUNCTION  => function ( $curl, $chunk ) use ( &$full, &$buffer, &$raw_response, &$aborted, &$stream_error, $provider, $on_progress ) {
 				$length  = strlen( $chunk );
 				$buffer .= $chunk;
+				$raw_response .= $chunk;
 
 				while ( false !== ( $break = strpos( $buffer, "\n" ) ) ) {
 					$line   = trim( substr( $buffer, 0, $break ) );
@@ -977,7 +1074,17 @@ class RJM_CSS_Advisor_GitHub_Client {
 					}
 
 					$frame = json_decode( $data, true );
-					$delta = $frame['choices'][0]['delta']['content'] ?? '';
+					if ( ! is_array( $frame ) ) {
+						continue;
+					}
+
+					$parsed = $this->parse_ai_stream_frame( $frame, $provider );
+					if ( $parsed['error'] ) {
+						$stream_error = $parsed['error'];
+						continue;
+					}
+					$delta = $parsed['delta'];
+
 					if ( '' === $delta || ! is_string( $delta ) ) {
 						continue;
 					}
@@ -1000,8 +1107,26 @@ class RJM_CSS_Advisor_GitHub_Client {
 		$code  = (int) curl_getinfo( $handle, CURLINFO_RESPONSE_CODE );
 		curl_close( $handle );
 
+		$last_line = trim( $buffer );
+		if ( 0 === strpos( $last_line, 'data:' ) ) {
+			$frame = json_decode( trim( substr( $last_line, 5 ) ), true );
+			if ( is_array( $frame ) ) {
+				$parsed = $this->parse_ai_stream_frame( $frame, $provider );
+				if ( $parsed['error'] ) {
+					$stream_error = $parsed['error'];
+				} elseif ( is_string( $parsed['delta'] ) && '' !== $parsed['delta'] ) {
+					$full .= $parsed['delta'];
+					$on_progress( $full );
+				}
+			}
+		}
+
 		if ( $aborted ) {
 			return $full;
+		}
+
+		if ( $stream_error ) {
+			return new WP_Error( 'openai_stream_error', $stream_error );
 		}
 
 		if ( 401 === $code ) {
@@ -1018,6 +1143,12 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		if ( $code && $code !== 200 ) {
+			$error_body = json_decode( trim( $raw_response ), true );
+			$error_message = $error_body['error']['message'] ?? '';
+			if ( is_string( $error_message ) && '' !== $error_message ) {
+				return new WP_Error( 'ai_stream_error', $error_message );
+			}
+
 			/* translators: %d: HTTP status code. */
 			return new WP_Error( 'ai_stream_error', sprintf( __( 'The AI provider returned HTTP %d.', 'rjm-css-advisor' ), $code ) );
 		}
@@ -1034,6 +1165,47 @@ class RJM_CSS_Advisor_GitHub_Client {
 	}
 
 	/**
+	 * Normalize one decoded streaming frame from either provider.
+	 *
+	 * @return array{delta:string,error:string}
+	 */
+	private function parse_ai_stream_frame( $frame, $provider ) {
+		if ( 'openai' !== $provider ) {
+			$delta = $frame['choices'][0]['delta']['content'] ?? '';
+			return [
+				'delta' => is_string( $delta ) ? $delta : '',
+				'error' => '',
+			];
+		}
+
+		$type = $frame['type'] ?? '';
+		if ( 'response.output_text.delta' === $type ) {
+			$delta = $frame['delta'] ?? '';
+			return [
+				'delta' => is_string( $delta ) ? $delta : '',
+				'error' => '',
+			];
+		}
+
+		if ( 'response.incomplete' === $type ) {
+			$reason = $frame['response']['incomplete_details']['reason'] ?? 'unknown reason';
+			return [
+				'delta' => '',
+				'error' => sprintf( __( 'OpenAI returned an incomplete response: %s.', 'rjm-css-advisor' ), $reason ),
+			];
+		}
+
+		if ( 'response.failed' === $type || 'error' === $type ) {
+			return [
+				'delta' => '',
+				'error' => $frame['response']['error']['message'] ?? $frame['message'] ?? __( 'OpenAI could not complete the response.', 'rjm-css-advisor' ),
+			];
+		}
+
+		return [ 'delta' => '', 'error' => '' ];
+	}
+
+	/**
 	 * Call the GitHub Copilot Business API.
 	 */
 	private function call_copilot_api( $token, $body ) {
@@ -1044,7 +1216,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 					'Authorization'          => 'Bearer ' . $token,
 					'Content-Type'           => 'application/json',
 					'Copilot-Integration-Id' => 'rjm-css-advisor',
-					'Editor-Version'         => 'rjm-css-advisor/1.0.0',
+					'Editor-Version'         => 'rjm-css-advisor/' . RJM_CSS_ADVISOR_VERSION,
 				],
 				'body'    => $body,
 				'timeout' => 60,
@@ -1084,14 +1256,14 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		$response = wp_remote_post(
-			self::OPENAI_API_BASE . '/chat/completions',
+			self::OPENAI_API_BASE . '/responses',
 			[
 				'headers' => [
 					'Authorization' => 'Bearer ' . $openai_key,
 					'Content-Type'  => 'application/json',
 				],
 				'body'    => $body,
-				'timeout' => 60,
+				'timeout' => 180,
 			]
 		);
 
@@ -1121,7 +1293,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 			return $error;
 		}
 
-		return $this->extract_ai_content( $response );
+		return $this->extract_openai_response_content( $response );
 	}
 
 	/**
@@ -1135,6 +1307,49 @@ class RJM_CSS_Advisor_GitHub_Client {
 			$error = new WP_Error( 'empty_advice', __( 'The AI returned an empty response.', 'rjm-css-advisor' ) );
 			$this->log_debug_error( 'extract_ai_content', $error );
 			return $error;
+		}
+
+		return $content;
+	}
+
+	/**
+	 * Extract text from a successful OpenAI Responses API response.
+	 */
+	private function extract_openai_response_content( $response ) {
+		$data = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $data ) ) {
+			return new WP_Error( 'openai_invalid_response', __( 'OpenAI returned an invalid response.', 'rjm-css-advisor' ) );
+		}
+
+		$status = $data['status'] ?? '';
+		if ( 'incomplete' === $status ) {
+			$reason = $data['incomplete_details']['reason'] ?? 'unknown reason';
+			return new WP_Error(
+				'openai_incomplete',
+				sprintf( __( 'OpenAI returned an incomplete response: %s.', 'rjm-css-advisor' ), $reason )
+			);
+		}
+
+		if ( in_array( $status, [ 'failed', 'cancelled' ], true ) || ! empty( $data['error'] ) ) {
+			$message = $data['error']['message'] ?? __( 'OpenAI could not complete the response.', 'rjm-css-advisor' );
+			return new WP_Error( 'openai_response_error', $message );
+		}
+
+		$content = '';
+		foreach ( (array) ( $data['output'] ?? [] ) as $output_item ) {
+			if ( 'message' !== ( $output_item['type'] ?? '' ) ) {
+				continue;
+			}
+
+			foreach ( (array) ( $output_item['content'] ?? [] ) as $content_item ) {
+				if ( 'output_text' === ( $content_item['type'] ?? '' ) && is_string( $content_item['text'] ?? null ) ) {
+					$content .= $content_item['text'];
+				}
+			}
+		}
+
+		if ( '' === trim( $content ) ) {
+			return new WP_Error( 'empty_advice', __( 'The AI returned an empty response.', 'rjm-css-advisor' ) );
 		}
 
 		return $content;
@@ -1266,7 +1481,7 @@ PROMPT;
 		}
 
 		$retry_message = $user_message . "\n\nPolicy correction required:\n" . $this->build_breakpoint_policy_correction_text( $selected );
-		$retry_raw     = $this->call_copilot_with_context( $token, 'CSS Generator Policy Correction', $retry_message, $system_prompt );
+		$retry_raw     = $this->call_copilot_with_context( $token, 'CSS Generator Policy Correction', $retry_message, $system_prompt, [], 'css' );
 
 		if ( ! is_wp_error( $retry_raw ) ) {
 			$retry_parsed = $this->parse_structured_css_response( $retry_raw );

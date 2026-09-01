@@ -536,6 +536,13 @@
 							settled = true;
 							$panel.data('troubleshootSessionId', event.data.session_id || '');
 							finish();
+							if (typeof event.data.message === 'string') {
+								text = event.data.message;
+								if (!$bubble) {
+									$bubble = appendMessageBubble($panel, 'assistant', '');
+								}
+								setBubbleContent($bubble, text);
+							}
 							if ($bubble && event.data.handoff_instruction) {
 								renderHandoffCard($bubble, event.data.handoff_instruction);
 							}
@@ -761,6 +768,13 @@
 							$panel.data('planSessionId', event.data.session_id || '');
 							$panel.data('planReady', Boolean(event.data.ready_to_generate));
 							finish();
+							if (typeof event.data.message === 'string') {
+								text = event.data.message;
+								if (!$bubble) {
+									$bubble = appendMessageBubble($panel, 'assistant', '');
+								}
+								setBubbleContent($bubble, text);
+							}
 							updateModeUI($panel);
 							renderPlanReadyNote($panel, event.data.ready_to_generate);
 							refreshHistory(getWrapFromPanel($panel), $panel);

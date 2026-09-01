@@ -275,7 +275,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 				$sentinel_hit = true;
 				$visible      = substr( $full, 0, $position );
 			} else {
-				$visible = substr( $full, 0, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
+				$visible = self::utf8_safe_prefix( $full, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
 			}
 
 			if ( strlen( $visible ) > $emitted ) {
@@ -339,7 +339,7 @@ class RJM_CSS_Advisor_GitHub_Client {
 				$sentinel_hit = true;
 				$visible      = substr( $full, 0, $position );
 			} else {
-				$visible = substr( $full, 0, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
+				$visible = self::utf8_safe_prefix( $full, max( 0, strlen( $full ) - ( strlen( $sentinel ) - 1 ) ) );
 			}
 
 			if ( strlen( $visible ) > $emitted ) {
@@ -374,6 +374,20 @@ class RJM_CSS_Advisor_GitHub_Client {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Return a byte-limited prefix without ending inside a UTF-8 character.
+	 */
+	private static function utf8_safe_prefix( $text, $byte_length ) {
+		$byte_length = max( 0, min( strlen( $text ), (int) $byte_length ) );
+		$prefix      = substr( $text, 0, $byte_length );
+
+		while ( '' !== $prefix && 1 !== preg_match( '//u', $prefix ) ) {
+			$prefix = substr( $prefix, 0, -1 );
+		}
+
+		return $prefix;
 	}
 
 	/**

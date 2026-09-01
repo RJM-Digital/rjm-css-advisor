@@ -129,6 +129,12 @@ $copilot_delta = rjm_invoke_private(
 );
 rjm_assert( 'Legacy' === $copilot_delta['delta'], 'Copilot stream parsing remains unchanged.' );
 
+$utf8_text = 'Got it — animate';
+$dash_end  = strpos( $utf8_text, '—' ) + 2;
+$prefix    = rjm_invoke_private( $client, 'utf8_safe_prefix', [ $utf8_text, $dash_end ] );
+rjm_assert( 'Got it ' === $prefix, 'Sentinel lookahead never emits a partial UTF-8 character.' );
+rjm_assert( 1 === preg_match( '//u', $prefix ), 'Sentinel lookahead output remains valid UTF-8.' );
+
 if ( $failures ) {
 	fwrite( STDERR, "Contract tests failed:\n- " . implode( "\n- ", $failures ) . "\n" );
 	exit( 1 );
